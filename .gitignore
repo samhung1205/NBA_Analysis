@@ -31,3 +31,17 @@ lerna-debug.log*
 
 # misc
 .DS_Store
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+dist/
+
+# Env
+.env
+.env.local
+
+# PM2
+logs/
+*.log
+seed/seed.generated.sql

@@ -1,0 +1,119 @@
+/**
+ * 資料庫抽象層 (DB Adapter)
+ * ------------------------------------------------------------
+ * 規格書 §0 銜接原則：正式環境必須使用「階段一 (Cloudflare Pages) 與
+ * 階段二 (Python 排程/爬蟲) 都連得到」的獨立 Postgres。
+ *
+ * 因此本層提供統一介面，依環境變數自動選擇驅動：
+ *   1. 若設定 DATABASE_URL  → 使用 Postgres（正式環境，階段二共用）
+ *   2. 否則若有 D1 binding  → 使用 D1/SQLite（沙盒開發期，方便本機驗證 UI/API）
+ *
+ * 所有 SQL 一律以 `?` 佔位符撰寫；Postgres adapter 會自動轉為 $1..$n。
+ * 業務程式碼（routes/pages）只依賴此介面，切換資料庫時無需改動任何一行。
+ */
+
+export interface Db {
+  /** 查詢多列 */
+  all<T = any>(sql: string, params?: unknown[]): Promise<T[]>
+  /** 查詢單列（無資料回傳 null） */
+  one<T = any>(sql: string, params?: unknown[]): Promise<T | null>
+  /** 執行寫入，回傳 lastInsertId（若可取得） */
+  run(sql: string, params?: unknown[]): Promise<{ lastInsertId?: number | string }>
+  /** 目前使用的驅動名稱，供 /api/system/status 顯示 */
+  readonly driver: 'postgres' | 'd1'
+}
+
+/* ------------------------------------------------------------------ */
+/* D1 / SQLite adapter                                                 */
+/* ------------------------------------------------------------------ */
+
+class D1Db implements Db {
+  readonly driver = 'd1' as const
+  constructor(private d1: D1Database) {}
+
+  async all<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+    const stmt = this.d1.prepare(sql).bind(...(params as any[]))
+    const { results } = await stmt.all<T>()
+    return (results ?? []) as T[]
+  }
+
+  async one<T>(sql: string, params: unknown[] = []): Promise<T | null> {
+    const rows = await this.all<T>(sql, params)
+    return rows.length ? rows[0] : null
+  }
+
+  async run(sql: string, params: unknown[] = []) {
+    const res = await this.d1.prepare(sql).bind(...(params as any[])).run()
+    return { lastInsertId: res.meta?.last_row_id }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Postgres adapter                                                    */
+/* ------------------------------------------------------------------ */
+
+/** 將 `?` 佔位符轉為 Postgres 的 $1, $2 ... */
+export function toPgPlaceholders(sql: string): string {
+  let i = 0
+  return sql.replace(/\?/g, () => `$${++i}`)
+}
+
+class PostgresDb implements Db {
+  readonly driver = 'postgres' as const
+  constructor(private sql: any) {}
+
+  async all<T>(rawSql: string, params: unknown[] = []): Promise<T[]> {
+    const text = toPgPlaceholders(rawSql)
+    const rows = await this.sql.unsafe(text, params as any[])
+    return rows as unknown as T[]
+  }
+
+  async one<T>(rawSql: string, params: unknown[] = []): Promise<T | null> {
+    const rows = await this.all<T>(rawSql, params)
+    return rows.length ? rows[0] : null
+  }
+
+  async run(rawSql: string, params: unknown[] = []) {
+    // Postgres 取得新 id 需靠 RETURNING id；呼叫端若需要 id 請自行加上
+    const rows = await this.all<any>(rawSql, params)
+    const first = rows?.[0]
+    return { lastInsertId: first?.id }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Factory                                                             */
+/* ------------------------------------------------------------------ */
+
+export type AppBindings = {
+  DB?: D1Database
+  DATABASE_URL?: string
+  SESSION_SECRET?: string
+}
+
+let pgClient: any = null
+
+export async function getDb(env: AppBindings): Promise<Db> {
+  if (env.DATABASE_URL) {
+    if (!pgClient) {
+      // 動態載入，避免在僅使用 D1 的環境把驅動打包進 bundle
+      const { default: postgres } = await import('postgres')
+      pgClient = postgres(env.DATABASE_URL, {
+        max: 3,
+        idle_timeout: 20,
+        connect_timeout: 10,
+        prepare: false, // 相容 Supabase pgbouncer (transaction pooling)
+      })
+    }
+    return new PostgresDb(pgClient)
+  }
+  if (env.DB) return new D1Db(env.DB)
+  throw new Error(
+    '未設定資料庫：請提供 DATABASE_URL (Postgres) 或 D1 binding「DB」。詳見 .env.example'
+  )
+}
+
+/** 供 SQL 依方言微調（少數必要處，例如 boolean 與 JSON 欄位） */
+export function isPg(db: Db) {
+  return db.driver === 'postgres'
+}

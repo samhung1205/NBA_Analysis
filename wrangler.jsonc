@@ -3,32 +3,24 @@
   "name": "webapp",
   "compatibility_date": "2026-07-10",
   "pages_build_output_dir": "./dist",
-  "compatibility_flags": [
-    "nodejs_compat"
+  "compatibility_flags": ["nodejs_compat"],
+
+  // ────────────────────────────────────────────────────────────
+  // 開發期資料庫：D1 (local SQLite)
+  //
+  // ⚠️ 規格書 §0 銜接原則：正式環境必須改用「階段二 Python 服務也連得到的
+  //    獨立 Postgres」(Supabase / Railway)。做法：
+  //      1. 在 Supabase 建立專案，取得連線字串
+  //      2. 對該 DB 執行 migrations/postgres/0001_init.sql
+  //      3. 設定 secret：npx wrangler pages secret put DATABASE_URL
+  //    只要 DATABASE_URL 存在，src/db 會自動改用 Postgres 驅動，
+  //    不需修改任何程式碼；D1 僅作為沙盒開發期的便利選項。
+  // ────────────────────────────────────────────────────────────
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "webapp-production",
+      "database_id": "local-dev-placeholder"
+    }
   ]
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // }
 }

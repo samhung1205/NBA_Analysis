@@ -1,0 +1,181 @@
+/**
+ * 驗證機制 (規格書 §3.2)
+ * ------------------------------------------------------------
+ * 個人登入 email/password，保護 bets / 績效等私人資料。
+ * 全部使用 Web Crypto API（Cloudflare Workers 可用，無 Node.js 依賴）：
+ *   - 密碼：PBKDF2-SHA256 (210,000 iterations) + 16-byte random salt
+ *   - Session：HMAC-SHA256 簽章的 cookie，無需額外儲存
+ */
+
+import type { Context } from 'hono'
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
+import type { Db } from '../db'
+
+const PBKDF2_ITERATIONS = 210_000
+const SESSION_COOKIE = 'nba_session'
+const SESSION_TTL_SEC = 60 * 60 * 24 * 14 // 14 天
+
+const enc = new TextEncoder()
+
+function b64encode(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
+  let s = ''
+  for (const b of bytes) s += String.fromCharCode(b)
+  return btoa(s)
+}
+
+function b64decode(str: string): Uint8Array {
+  const bin = atob(str)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+/* ----------------------------- 密碼雜湊 ----------------------------- */
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const bits = await deriveBits(password, salt, PBKDF2_ITERATIONS)
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${b64encode(salt)}$${b64encode(bits)}`
+}
+
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  try {
+    const [scheme, iterStr, saltB64, hashB64] = stored.split('$')
+    if (scheme !== 'pbkdf2') return false
+    const bits = await deriveBits(password, b64decode(saltB64), parseInt(iterStr, 10))
+    return timingSafeEqual(new Uint8Array(bits), b64decode(hashB64))
+  } catch {
+    return false
+  }
+}
+
+async function deriveBits(password: string, salt: Uint8Array, iterations: number) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, [
+    'deriveBits',
+  ])
+  return crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: salt as unknown as BufferSource, iterations, hash: 'SHA-256' },
+    key,
+    256
+  )
+}
+
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]
+  return diff === 0
+}
+
+/* ----------------------------- Session ----------------------------- */
+
+type SessionPayload = { uid: number; email: string; exp: number }
+
+async function hmac(secret: string, data: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data))
+  return b64encode(sig).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+export async function createSessionToken(
+  secret: string,
+  uid: number,
+  email: string
+): Promise<string> {
+  const payload: SessionPayload = {
+    uid,
+    email,
+    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SEC,
+  }
+  const body = b64encode(enc.encode(JSON.stringify(payload)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+  return `${body}.${await hmac(secret, body)}`
+}
+
+export async function readSessionToken(
+  secret: string,
+  token: string
+): Promise<SessionPayload | null> {
+  const [body, sig] = token.split('.')
+  if (!body || !sig) return null
+  if (!timingSafeEqual(enc.encode(await hmac(secret, body)), enc.encode(sig))) return null
+  try {
+    const json = new TextDecoder().decode(
+      b64decode(body.replace(/-/g, '+').replace(/_/g, '/'))
+    )
+    const payload = JSON.parse(json) as SessionPayload
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null
+    return payload
+  } catch {
+    return null
+  }
+}
+
+export function setSessionCookie(c: Context, token: string) {
+  setCookie(c, SESSION_COOKIE, token, {
+    httpOnly: true,
+    secure: new URL(c.req.url).protocol === 'https:',
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: SESSION_TTL_SEC,
+  })
+}
+
+export function clearSessionCookie(c: Context) {
+  deleteCookie(c, SESSION_COOKIE, { path: '/' })
+}
+
+export async function getCurrentUser(
+  c: Context
+): Promise<{ uid: number; email: string } | null> {
+  const secret = (c.env as any)?.SESSION_SECRET || 'dev-insecure-secret-change-me'
+  const token = getCookie(c, SESSION_COOKIE)
+  if (!token) return null
+  const payload = await readSessionToken(secret, token)
+  return payload ? { uid: payload.uid, email: payload.email } : null
+}
+
+/** 註冊使用者（重複 email 回傳 null） */
+export async function registerUser(
+  db: Db,
+  email: string,
+  password: string,
+  displayName?: string
+): Promise<{ id: number; email: string } | null> {
+  const existing = await db.one<{ id: number }>('SELECT id FROM users WHERE email = ?', [
+    email.toLowerCase(),
+  ])
+  if (existing) return null
+  const hash = await hashPassword(password)
+  const isPg = db.driver === 'postgres'
+  const sql = isPg
+    ? 'INSERT INTO users (email, password_hash, display_name) VALUES (?, ?, ?) RETURNING id'
+    : 'INSERT INTO users (email, password_hash, display_name) VALUES (?, ?, ?)'
+  const res = await db.run(sql, [email.toLowerCase(), hash, displayName ?? null])
+  const id = Number(res.lastInsertId)
+  return { id, email: email.toLowerCase() }
+}
+
+/** 驗證登入 */
+export async function authenticate(
+  db: Db,
+  email: string,
+  password: string
+): Promise<{ id: number; email: string } | null> {
+  const user = await db.one<{ id: number; email: string; password_hash: string }>(
+    'SELECT id, email, password_hash FROM users WHERE email = ?',
+    [email.toLowerCase()]
+  )
+  if (!user) return null
+  const ok = await verifyPassword(password, user.password_hash)
+  return ok ? { id: user.id, email: user.email } : null
+}

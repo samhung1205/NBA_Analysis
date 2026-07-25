@@ -3,13 +3,26 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:sandbox": "wrangler pages dev dist --local --ip 0.0.0.0 --port 3000",
     "build": "vite build",
-    "preview": "wrangler pages dev",
-    "deploy": "npm run build && wrangler pages deploy",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "preview": "wrangler pages dev dist --local",
+    "deploy": "npm run build && wrangler pages deploy dist",
+    "deploy:prod": "npm run build && wrangler pages deploy dist --project-name webapp",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
+    "test:api": "node scripts/smoke-test.mjs",
+    "db:migrate:local": "wrangler d1 execute webapp-production --local --file=./migrations/d1/0001_init.sql",
+    "db:seed:local": "node scripts/render-seed.mjs && wrangler d1 execute webapp-production --local --file=./seed/seed.generated.sql",
+    "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed:local",
+    "db:console:local": "wrangler d1 execute webapp-production --local --command",
+    "db:migrate:pg": "node scripts/pg-migrate.mjs",
+    "db:seed:pg": "node scripts/pg-seed.mjs",
+    "pw:hash": "node seed/make-password-hash.mjs",
+    "seed:render": "node scripts/render-seed.mjs"
   },
   "dependencies": {
-    "hono": "^4.12.30"
+    "hono": "^4.12.30",
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@hono/vite-build": "^1.11.1",
