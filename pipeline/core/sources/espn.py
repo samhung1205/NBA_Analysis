@@ -35,6 +35,8 @@ def fetch_scoreboard(yyyymmdd: str) -> list[dict]:
         teams = comp["competitors"]
         home = next(t for t in teams if t["homeAway"] == "home")
         away = next(t for t in teams if t["homeAway"] == "away")
+        if not home["team"].get("abbreviation") or not away["team"].get("abbreviation"):
+            continue  # 季前賽對手為非 NBA 球隊（無縮寫），略過該場而非讓整天失敗
         out.append({
             "espn_event_id": ev["id"],
             "date_utc": ev.get("date"),

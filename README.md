@@ -196,3 +196,51 @@ npm run db:reset:local     # 重置本機資料庫
 3. `nba_api` 自訂 `headers=` 會**整個取代**預設標頭（遺失 Referer 等），須與 `NBAStatsHTTP.headers` 合併；不要自行重建 `requests.Session`。
 4. **Supabase 免費專案閒置會被暫停**：暫停後 pooler 回 `tenant/user not found`、直連主機 DNS 消失，需到 Supabase Dashboard 手動 Restore。
 5. 背景執行 Python 請加 `-u`，否則輸出被緩衝，容易誤判為卡住。
+
+### Phase C 現況（2026-10）
+
+`cd pipeline && python run_train.py`（評測加 `--no-write`）。walk-forward（以賽季為單位），評測 2024-25 + 2025-26 共 2,631 場，
+特徵皆為賽前可得：Elo、休息/背靠背、近況、交手、賽程（目前沒有 box score / 傷病，見下方路線圖）。
+
+| 勝負（主隊勝） | accuracy | log loss | Brier |
+|---|---|---|---|
+| Elo baseline | 0.6697 | 0.6221 | 0.2150 |
+| **ml-v1.0（邏輯迴歸）** | **0.6724** | **0.6046** | **0.2088** |
+
+兩個評測賽季單獨看也都優於 Elo。**勝負模型用邏輯迴歸而非 XGBoost**：在驗證賽季（2022-23、2023-24）上所有 XGBoost 設定
+（含校準）都輸給 5 特徵邏輯迴歸（log loss 0.638 vs 0.628）；特徵（elo_diff、b2b_diff、margin10_diff、rest_diff、form10_diff）
+與 C 值只用評測賽季「之前」的賽季選出，評測賽季只跑一次。accuracy 的優勢（+0.27 pt，約 7 場）不顯著，
+log loss / Brier 的進步才是穩的。
+
+**尚未達標**：分差/總分/上半場（XGBoost）MAE 與 baseline 持平（margin 11.39 vs 11.34、total 15.26 vs 15.22、
+h1 margin 8.95 vs 8.96、h1 total 9.87 vs 9.89），上半場勝負方向 61.7% vs 60.9%。規格書「ML 全指標優於 Elo」目前只有勝負達成。
+預測以 `model_version='ml-v1.0'` 寫入 `predictions`（網站顯示最新一筆）；模型存檔於 `pipeline/artifacts/`（gitignore）。
+
+## 路線圖 / 保留待辦
+
+### [保留] 補上 box score 與傷病特徵（Phase C 進階，使用者未來想做）
+
+**為什麼**：Phase C 目前只有比賽層級特徵（Elo/休息/近況/交手），與 Elo 高度重疊：勝負僅小幅優於 Elo，
+分差/總分/半場 MAE 與 baseline 幾乎持平（見上方 Phase C 現況）。要有實質提升，需要 Elo 看不到的資訊：
+節奏與攻守效率、球員缺陣。
+
+**前置條件**：本機 IP 被 stats.nba.com 的 Akamai 封鎖 `/stats/*`（見上方踩坑 1）。需要在「未被封鎖的 IP」
+跑 NBA 官方回填：雲端主機（Railway/Fly，之後本來就要搬）、VPN 或手機熱點皆可。DB 是共用的，
+在別處跑 `cd pipeline && python run_backfill.py`（約數小時，可中斷續傳）即可，本機不需任何改動。
+同時需有 Java（nbainjuries 解析 PDF），Dockerfile 已含。
+
+**要做的事**
+1. 回填 box score：`run_backfill.py` 會寫入 `team_game_stats`（pace / off_rtg / def_rtg / ts% / efg% / tov_ratio）
+   與 `player_game_stats`（先發、上場分鐘、plus_minus）。ESPN 暫存賽事 `espn:<id>` 會被自動認領改寫為官方 ID。
+2. 回填歷史傷病：`nbainjuries` 自 2021-22 起有官方報告，需寫一支按日期回補的 job（目前 `daily.py` 只抓最新一份）。
+3. `core/models/ml_features.py` 新增特徵（同樣先 shift(1)，只用賽前資訊）：近 10 場 pace / off_rtg / def_rtg / ts%、
+   「主力缺陣」（最近先發名單中 Out/Doubtful 人數與其分鐘占比）。`core/jobs/backtest.py` 已有先發缺陣計算邏輯可沿用。
+4. 重跑 `run_backtest.py`（Elo 含傷病調整）與 `run_train.py`，比較評測。
+
+**驗收**：在 2024-25 + 2025-26 walk-forward 評測上，勝負 accuracy / log loss / Brier 全數優於 Elo，
+且分差/總分/上半場 MAE 優於 baseline。需要超越的基準（2,631 場）：
+Elo acc 0.6697 / log loss 0.6221 / Brier 0.2150；margin MAE 11.34、total MAE 15.22、h1 margin 8.96、h1 total 9.89。
+
+**環境備註**：macOS 跑 XGBoost 需要 OpenMP：`brew install libomp`（或暫以
+`DYLD_FALLBACK_LIBRARY_PATH=pipeline/.venv/lib/python3.11/site-packages/sklearn/.dylibs` 借用 scikit-learn 內建的；
+注意 `nohup` 會清掉 DYLD_* 變數）。Docker 映像需加裝 `libgomp1`。
