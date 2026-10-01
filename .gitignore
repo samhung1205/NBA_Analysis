@@ -32,6 +32,12 @@ lerna-debug.log*
 # misc
 .DS_Store
 
+# Phase 2 Python pipeline
+pipeline/.venv/
+pipeline/__pycache__/
+pipeline/**/__pycache__/
+pipeline/.env
+
 # Cloudflare / Wrangler
 .wrangler/
 .dev.vars

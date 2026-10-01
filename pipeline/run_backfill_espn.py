@@ -1,0 +1,6 @@
+#!/usr/bin/env python
+"""用法：python run_backfill_espn.py --seasons 2024-25 2025-26"""
+from core.jobs.backfill_espn import main
+
+if __name__ == "__main__":
+    main()

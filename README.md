@@ -72,12 +72,12 @@ bets 寫入→讀回→結算→刪除、ROI 以台彩實際賠率計算、404/4
 > ⚠️ D1 僅供沙盒開發便利之用 —— 階段二的 Python 服務**無法**連線 D1。
 > 正式部署前務必依下方步驟切到 Postgres。
 
-### 切換到正式 Postgres（階段二開工前必做）
+### 切換到正式 Postgres（階段二開工前必做）✅ 已完成並驗證
 
 ```bash
 # 1. 在 Supabase 建專案，取得連線字串
-#    ⚠️ 給 Cloudflare Workers 用請選 Connection pooling（Transaction mode, port 6543）
-#    ⚠️ 階段二 Python 可用直連 5432（Session mode）
+#    ⚠️ 用 Session pooler（pooler host + port 5432），不要用 Transaction pooler（port 6543）
+#       ——見下方「⚠️ 連線模式踩坑記錄」
 
 # 2. 建立 schema
 DATABASE_URL="postgresql://..." npm run db:migrate:pg
@@ -89,6 +89,23 @@ DATABASE_URL="postgresql://..." npm run db:seed:pg
 npx wrangler pages secret put DATABASE_URL
 npx wrangler pages secret put SESSION_SECRET   # openssl rand -base64 32
 ```
+
+**狀態**：Supabase Postgres 已建立、migration 已套用、90 項 smoke test 已在真實 Postgres + 真並行流量下全數通過。`.dev.vars` 存有本機開發用連線字串（已 gitignore，不在 repo 中）。
+
+#### ⚠️ 連線模式踩坑記錄（2026-08-01）
+
+規格書原先建議 Workers 用 Supabase 的 **Transaction pooler（port 6543）**。實測發現這個組合在 Cloudflare Workers runtime 下會**間歇性卡死請求**：
+
+```
+GET /api/games/tomorrow  → 200 OK (2s)
+GET /api/games/today     → 500，僅 10ms 就被判定「Worker's code had hung」
+```
+
+根因是兩層問題疊加：
+1. **`src/db/index.ts` 原本把 pg 連線做成跨請求共用的模組級單例** —— Cloudflare Workers 禁止一個請求沿用另一個請求開啟的 socket I/O，跨請求重用連線會被 runtime 判定為掛起。已修正為**每個請求建立獨立連線**（`max: 1`，不快取）。
+2. **Transaction pooler 本身與 `postgres.js` 的連線管線化（pipelining）假設衝突**，即使修正上述單例問題後仍會間歇卡死；換成 **Session pooler（同一 pooler host，port 5432）** 後在多輪並行壓測（8 端點 × 5 輪同時發送）與完整 90 項 smoke test 下皆穩定通過。
+
+現行修正的代價是每次請求多一次 TCP+TLS 連線開銷（約 150–300ms），對個人使用的低流量網站可接受。**若未來要正式上線給多人使用**，建議改用 [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/)（官方為 Workers + 外部 Postgres 設計的邊緣連線代理），可同時解決連線延遲與這個限制，但需要另外用 `wrangler hyperdrive create` 建立資源。
 
 ### Seed 測試資料
 單一份樣板 `seed/seed.template.sql`，由 `scripts/render-seed.mjs` 將時間 token
@@ -125,9 +142,9 @@ npm run db:reset:local     # 重置本機資料庫
 ## 部署
 
 - **平台**：Cloudflare Pages
-- **狀態**：⚠️ 尚未部署（等待使用者提供 Supabase `DATABASE_URL` 後部署）
+- **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-07-25
+- **最後更新**：2026-08-01
 
 ## 尚未實作（階段二範圍）
 
@@ -160,8 +177,22 @@ npm run db:reset:local     # 重置本機資料庫
 
 ## 待與使用者確認的事項
 
-1. **Supabase / Railway 帳號**：需要 `DATABASE_URL` 才能切到正式 Postgres 並部署
-2. **Edge 精算範圍**：目前讓分/大小分的 edge 以「模型值 vs 盤口線的落差」呈現（`line_gap`），
+1. **Edge 精算範圍**：目前讓分/大小分的 edge 以「模型值 vs 盤口線的落差」呈現（`line_gap`），
    標記為 `note: 'edge 需階段二模型輸出分佈後精算'`。真正的機率型 edge 需階段二模型輸出
    分差/總分的**機率分佈**（而非單點預測）才能計算 —— 屬 Phase C/D 範圍。獨贏(ML)的 edge 已為真實機率計算。
-3. **球隊中文名**：目前 seed 用常見譯名，若你有偏好的譯名（如「塞爾提克」vs「凱爾特人」）可調整
+2. **球隊中文名**：目前 seed 用常見譯名，若你有偏好的譯名（如「塞爾提克」vs「凱爾特人」）可調整
+3. **正式部署與 Hyperdrive**：目前修正（每請求獨立連線）已驗證穩定可用；若之後要正式對外開放給多人使用，
+   建議評估改用 Cloudflare Hyperdrive 以消除連線延遲，見上方「連線模式踩坑記錄」
+
+## 階段二（pipeline/）狀態與已知問題
+
+- **程式**：`pipeline/`（Python）— nba_api / ESPN / nbainjuries fetcher、Elo walk-forward 回測、APScheduler、Dockerfile；`migrations/postgres/0002_phase2.sql` 新增 `elo_ratings`。
+- **回填**：`python run_backfill.py`（NBA 官方，含 box score/進階數據）；`python run_backfill_espn.py`（ESPN 備援，僅賽程/比分/逐節，足以做 Elo 回測與半場模型）。皆為 UPSERT，可中斷重跑；ESPN 暫存的 `espn:<id>` 賽事會在 NBA 官方回填時自動認領改寫。回測：`python run_backtest.py --eval-seasons 2`。
+
+### 踩坑記錄（2026-08 ~ 10）
+
+1. **`stats.nba.com/stats/*` 對部分 IP 會被 Akamai 靜默丟棄請求**：DNS/TCP/TLS 皆正常（~30ms），但 HTTP 請求零回應位元組（curl `ttfb=0`，IPv4/IPv6 皆同），而站台根路徑、`www.nba.com` 正常。非程式問題，換 IP（雲端主機/VPN/熱點）或改用 ESPN 備援。排查方式：`curl -4 -m 15 -w "%{time_connect} %{time_appconnect} %{time_starttransfer}\n" -o /dev/null -H "Referer: https://www.nba.com/" "https://stats.nba.com/stats/scoreboardv3?GameDate=2025-02-01&LeagueID=00"`。
+2. **ESPN**：不可偽造瀏覽器 UA（`Mozilla/5.0` 會 403），用 requests 預設 UA；scoreboard 只接受單日 `dates=YYYYMMDD`。
+3. `nba_api` 自訂 `headers=` 會**整個取代**預設標頭（遺失 Referer 等），須與 `NBAStatsHTTP.headers` 合併；不要自行重建 `requests.Session`。
+4. **Supabase 免費專案閒置會被暫停**：暫停後 pooler 回 `tenant/user not found`、直連主機 DNS 消失，需到 Supabase Dashboard 手動 Restore。
+5. 背景執行 Python 請加 `-u`，否則輸出被緩衝，容易誤判為卡住。

@@ -91,20 +91,18 @@ export type AppBindings = {
   SESSION_SECRET?: string
 }
 
-let pgClient: any = null
-
 export async function getDb(env: AppBindings): Promise<Db> {
   if (env.DATABASE_URL) {
-    if (!pgClient) {
-      // 動態載入，避免在僅使用 D1 的環境把驅動打包進 bundle
-      const { default: postgres } = await import('postgres')
-      pgClient = postgres(env.DATABASE_URL, {
-        max: 3,
-        idle_timeout: 20,
-        connect_timeout: 10,
-        prepare: false, // 相容 Supabase pgbouncer (transaction pooling)
-      })
-    }
+    // 每個請求建立獨立連線，不可跨請求快取：Cloudflare Workers 禁止
+    // 一個請求沿用另一個請求開啟的 socket I/O，跨請求共用連線物件
+    // 會被 runtime 判定為掛起（實測會直接 500 "Worker's code had hung"）。
+    const { default: postgres } = await import('postgres')
+    const pgClient = postgres(env.DATABASE_URL, {
+      max: 1,
+      idle_timeout: 5,
+      connect_timeout: 10,
+      prepare: false, // 相容 Supabase pgbouncer
+    })
     return new PostgresDb(pgClient)
   }
   if (env.DB) return new D1Db(env.DB)
