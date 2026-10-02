@@ -11,12 +11,13 @@ Phase A-6：排程用的抓取工作入口
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from typing import Callable
 
-from ..db import cursor, heartbeat, insert_injury_if_changed
+from ..db import cursor, heartbeat, insert_injury_if_changed, transaction
+from ..injury_history import ingest_snapshot, load_directories, parse_report
 from ..sources import injuries as injuries_src
-from ..timeutil import now_utc
+from ..timeutil import ET, UTC, now_utc
 from .games_sync import SyncReport, run_active_refresh, run_daily_schedule
 
 log = logging.getLogger(__name__)
@@ -36,34 +37,85 @@ def refresh_live_and_final_job() -> SyncReport | None:
 # 傷病                                                                  #
 # ------------------------------------------------------------------ #
 
-def ingest_injury_rows(cur, rows: list[dict], report_utc: datetime, *, source: str = "nba_official") -> tuple[int, int]:
-    """把一份報告寫入 injuries。回傳 (新增列數, 無法對應球員的列數)。冪等。"""
-    cur.execute("SELECT id, name, team_id FROM players")
-    by_name: dict[str, tuple[int, int | None] | None] = {}
-    for r in cur.fetchall():
-        key = injuries_src.normalize_player_name(r["name"])
-        if not key:
-            continue
-        # 同名球員無法可靠對應 → 標為 None，整批略過而非猜錯人
-        by_name[key] = None if key in by_name else (r["id"], r["team_id"])
+NOT_LISTED_REASON = "Not listed on latest official report"
 
-    written = unmatched = 0
-    for row in rows:
-        key = injuries_src.normalize_player_name(row.get("player_name"))
-        status = row.get("status")
-        if not key or not isinstance(status, str) or not status.strip():
-            continue  # Not Yet Submitted 等無狀態列
-        match = by_name.get(key)
-        if not match:
-            unmatched += 1
+
+def _game_id_for(cur, cache: dict, team_id: int | None, game_date) -> int | None:
+    """球隊 + 賽事日（ET）→ games.id（賽程尚未同步則 None）。"""
+    if team_id is None:
+        return None
+    key = (team_id, game_date)
+    if key not in cache:
+        start = datetime.combine(game_date, time.min, tzinfo=ET).astimezone(UTC)
+        cur.execute(
+            "SELECT id FROM games WHERE (home_team_id = %s OR away_team_id = %s)"
+            " AND date_utc >= %s AND date_utc < %s ORDER BY date_utc LIMIT 1",
+            (team_id, team_id, start, start + timedelta(days=1)))
+        row = cur.fetchone()
+        cache[key] = row["id"] if row else None
+    return cache[key]
+
+
+def ingest_injury_rows(cur, rows: list[dict], report_utc: datetime, *, source: str = "nba_official") -> tuple[int, int]:
+    """把一份報告寫入 DB。回傳 (injuries 新增列數, 無法對應球員的列數)。冪等、可並行。
+
+    兩個層次：
+      1. 完整快照（injury_reports / injury_report_entries）：歷史 as-of 還原的權威來源，單一交易寫入。
+      2. injuries（API 讀取「每位球員最新狀態」）：只在狀態變化時新增一列；每隊只取報告中**最早的賽事日**，
+         避免同一球員因多個賽事日列在同一份報告而互相覆寫。球員在「已申報」的隊伍中不再出現
+         → 補一列 Available（reason='Not listed on latest official report'），舊的 Out/Doubtful 不再永久保留。
+         NOT YET SUBMITTED 的隊伍不動（沒有資訊，不是康復）。
+         若已有「更新」的報告寫入過，這份（補抓的舊報告）只進快照、不動 injuries。
+    """
+    teams, players = load_directories(cur)
+    parsed = parse_report(rows, report_utc, teams, players)
+    with transaction() as tcur:
+        ingest_snapshot(tcur, parsed, source=source)
+
+    # 較新的報告已經寫入過 → 這份是補抓的舊報告：只進快照，不動「最新狀態」表，
+    # 否則舊報告的 Out 會蓋過新報告「球員已不在名單上」的事實（older snapshot overwriting newer state）。
+    cur.execute("SELECT 1 FROM injury_reports WHERE source = %s AND report_time_utc > %s LIMIT 1",
+                (source, report_utc))
+    if cur.fetchone():
+        return 0, parsed.n_unmatched
+
+    team_first_date: dict[str, str] = {}
+    for iso in sorted(parsed.coverage):
+        for abbr in parsed.coverage[iso]:
+            team_first_date.setdefault(abbr, iso)
+    listed: dict[str, set[int]] = {}
+    gid_cache: dict = {}
+    written = 0
+    for e in parsed.entries:
+        if e.player_id is None or e.team_abbr is None or e.game_date.isoformat() != team_first_date.get(e.team_abbr):
             continue
-        player_id, team_id = match
-        reason = row.get("reason") if isinstance(row.get("reason"), str) else None
+        listed.setdefault(e.team_abbr, set()).add(e.player_id)
         written += int(insert_injury_if_changed(
-            cur, report_time_utc=report_utc, player_id=player_id, team_id=team_id, game_id=None,
-            status=status.strip(), reason=reason, source=source,
-        ))
-    return written, unmatched
+            cur, report_time_utc=report_utc, player_id=e.player_id, team_id=e.team_id,
+            game_id=_game_id_for(cur, gid_cache, e.team_id, e.game_date), status=e.status,
+            reason=e.reason, source=source))
+
+    # 球員消失 → Available
+    submitted = {abbr for abbr, iso in team_first_date.items() if not parsed.coverage[iso][abbr].get("nys")}
+    if submitted:
+        cur.execute(
+            """
+            SELECT DISTINCT ON (player_id) player_id, team_id, status FROM injuries
+             WHERE source = %s AND report_time_utc < %s AND player_id IS NOT NULL
+             ORDER BY player_id, report_time_utc DESC, id DESC
+            """,
+            (source, report_utc))
+        abbr_by_id = {v: k for k, v in teams.abbr_to_id.items()}
+        for r in cur.fetchall():
+            abbr = abbr_by_id.get(r["team_id"])
+            if abbr not in submitted or r["status"] == "Available" or r["player_id"] in listed.get(abbr, set()):
+                continue
+            iso = team_first_date[abbr]
+            written += int(insert_injury_if_changed(
+                cur, report_time_utc=report_utc, player_id=r["player_id"], team_id=r["team_id"],
+                game_id=_game_id_for(cur, gid_cache, r["team_id"], date.fromisoformat(iso)),
+                status="Available", reason=NOT_LISTED_REASON, source=source))
+    return written, parsed.n_unmatched
 
 
 def fetch_injuries_job(

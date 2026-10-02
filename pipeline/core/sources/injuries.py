@@ -46,6 +46,21 @@ def check_report_valid(ts_et: datetime) -> bool:
         return False
 
 
+class ReportNotPublished(Exception):
+    """該時間點沒有報告（官方靜態檔 403/404）。與暫時性錯誤 / 解析失敗區分，回填據此記為 missing。"""
+
+
+def fetch_injury_report_strict(ts_et: datetime) -> list[dict]:
+    """同 fetch_injury_report，但「報告不存在」拋 ReportNotPublished（歷史回填用，省下先 check 的一次往返）。"""
+    try:
+        return fetch_injury_report(ts_et)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)
+        if type(e).__name__ == "URLRetrievalError" and ("403" in msg or "404" in msg):
+            raise ReportNotPublished(msg) from e
+        raise
+
+
 def fetch_injury_report(ts_et: datetime) -> list[dict]:
     """ts_et：美東 naive datetime。回傳 [{game_date, matchup, team, player_name, status, reason}]"""
     from nbainjuries import injury

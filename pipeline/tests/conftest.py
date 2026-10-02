@@ -25,7 +25,8 @@ except RuntimeError:  # 沒有 DATABASE_URL（例如純 CI）：純邏輯測試�
     os.environ["DATABASE_URL"] = "postgresql://invalid:invalid@127.0.0.1:1/none"
     import core.config  # noqa: F401
 
-TABLES = ["injuries", "player_game_stats", "team_game_stats", "elo_ratings", "predictions", "odds_snapshots",
+TABLES = ["injury_report_entries", "injury_reports", "source_fetch_log", "team_game_derived",
+          "injuries", "player_game_stats", "team_game_stats", "elo_ratings", "predictions", "odds_snapshots",
           "bets", "games", "players", "teams", "data_sources"]
 
 

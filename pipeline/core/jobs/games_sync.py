@@ -18,17 +18,14 @@ from datetime import datetime, timedelta
 
 from ..db import (
     cursor, find_game_by_matchup, GAME_COLUMNS, get_game_id_by_nba_id, upsert_game, adopt_espn_game,
-    upsert_player, upsert_player_game_stats, upsert_team_game_stats,
+    transaction, upsert_team_game_stats,
 )
+from .box_store import store_box_basic
 from ..sources import espn, nba_cdn, nba_stats
 from ..sources.fallback import AllSourcesFailed, Attempt, fetch_with_fallback, report_attempts
 from ..timeutil import et_dates_between, in_window, now_utc, refresh_window_utc
 
 log = logging.getLogger(__name__)
-
-PLAYER_FIELDS = ("min", "pts", "reb", "ast", "stl", "blk", "tov", "fgm", "fga",
-                 "fg3m", "fg3a", "ftm", "fta", "plus_minus", "started")
-
 
 @dataclass
 class SyncReport:
@@ -134,6 +131,7 @@ def games_needing_box(cur, start_utc: datetime, end_utc: datetime) -> list[dict]
         """
         SELECT g.id, g.nba_game_id, g.home_team_id, g.away_team_id,
                NOT EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id) OR g.home_q1 IS NULL
+                 OR EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id AND t.fga IS NULL)
                  AS needs_basic,
                EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id AND t.pace IS NULL)
                  OR NOT EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id)
@@ -143,7 +141,7 @@ def games_needing_box(cur, start_utc: datetime, end_utc: datetime) -> list[dict]
            AND g.date_utc >= %s AND g.date_utc < %s
            AND (NOT EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id)
                 OR g.home_q1 IS NULL
-                OR EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id AND t.pace IS NULL))
+                OR EXISTS (SELECT 1 FROM team_game_stats t WHERE t.game_id = g.id AND (t.fga IS NULL OR t.pace IS NULL)))
          ORDER BY g.date_utc
         """,
         (start_utc, end_utc),
@@ -152,18 +150,7 @@ def games_needing_box(cur, start_utc: datetime, end_utc: datetime) -> list[dict]
 
 
 def _store_basic(cur, game: dict, box: dict) -> None:
-    for side, team_id in (("home", game["home_team_id"]), ("away", game["away_team_id"])):
-        upsert_team_game_stats(cur, game_id=game["id"], team_id=team_id,
-                               is_home=1 if side == "home" else 0, **box[side]["team"])
-        for p in box[side]["players"]:
-            pid = upsert_player(cur, nba_player_id=p["nba_player_id"], name=p["name"], team_id=team_id,
-                                position=p["position"], is_starter=p["started"])
-            upsert_player_game_stats(cur, game_id=game["id"], player_id=pid, team_id=team_id,
-                                     **{k: p[k] for k in PLAYER_FIELDS if k in p})
-    if box.get("quarters"):
-        q = {k: v for k, v in box["quarters"].items() if k in GAME_COLUMNS}
-        sets = ", ".join(f"{k} = %s" for k in q)
-        cur.execute(f"UPDATE games SET {sets}, updated_at = NOW() WHERE id = %s", [*q.values(), game["id"]])
+    store_box_basic(cur, game, box)
 
 
 def _store_advanced(cur, game: dict, adv: dict) -> None:
@@ -189,7 +176,7 @@ def _sync_box_scores(start_utc: datetime, end_utc: datetime, report: SyncReport)
                     ("nba_api", lambda: nba_stats.fetch_box_traditional(gid)),
                 ])
                 last_basic = res.attempts
-                with cursor() as cur:
+                with transaction() as cur:
                     _store_basic(cur, game, res.data)
                 report.box_basic_done += 1
             except AllSourcesFailed as e:

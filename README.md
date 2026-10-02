@@ -153,6 +153,7 @@ npm run db:reset:local     # 重置本機資料庫
 
 - ✅ **Phase A** 資料基礎：fetcher、排程器、回填（C.5A 另做了來源 fallback / 排程 / 傷病硬化）
 - ✅ **Phase B** Baseline：特徵工程、Elo walk-forward 回測
+- ✅ **Phase C.5B** 歷史資料完整度：五季 box score / 衍生進階指標 / 歷史傷病快照 / 賽前特徵底座（見下方「Phase C.5B」）
 - 🟡 **Phase C** ML：勝負達標；分差/總分/上半場尚未優於 baseline（見下方「Phase C 現況」）
 
 ### 尚未實作
@@ -167,7 +168,7 @@ npm run db:reset:local     # 重置本機資料庫
 | `games`（含逐節/半場欄位） | 賽事總覽、詳情頁逐節表 |
 | `predictions`（含 `features_json.contributions`） | 總覽卡片、詳情頁特徵拆解 |
 | `odds_snapshots`（`source='twsport'` / `'oddsapi'`） | 盤口比較表、Edge 標示、變動折線圖 |
-| `injuries` | 傷病中心、主力缺陣警示、詳情頁 |
+| `injuries`（最新狀態；球員從報告消失 → 補 `Available`） | 傷病中心、主力缺陣警示、詳情頁 |
 | `data_sources` | 系統狀態頁（含 warn/error 告警） |
 | `model_metrics` | 回測績效頁 |
 
@@ -177,7 +178,7 @@ npm run db:reset:local     # 重置本機資料庫
 
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
-3. Phase C.5B（box score / 傷病回填）→ 重跑 Phase C，再進 Phase D
+3. Phase C.5C（用 C.5B 資料層重新評估模型）→ 再進 Phase D
 
 ## 待與使用者確認的事項
 
@@ -191,7 +192,7 @@ npm run db:reset:local     # 重置本機資料庫
 ## 階段二（pipeline/）狀態與已知問題
 
 - **程式**：`pipeline/`（Python）— nba_api / ESPN / nbainjuries fetcher、Elo walk-forward 回測、APScheduler、Dockerfile；`migrations/postgres/0002_phase2.sql` 新增 `elo_ratings`。
-- **回填**：`python run_backfill.py`（NBA 官方，含 box score/進階數據）；`python run_backfill_espn.py`（ESPN 備援，僅賽程/比分/逐節，足以做 Elo 回測與半場模型）。皆為 UPSERT，可中斷重跑；ESPN 暫存的 `espn:<id>` 賽事會在 NBA 官方回填時自動認領改寫。回測：`python run_backtest.py --eval-seasons 2`。
+- **回填**：C.5B 起歷史 box score 走 `python -m core.jobs.box_backfill`（NBA CDN，不需 stats.nba.com）；舊的 `python run_backfill.py`（stats.nba.com，含官方進階數據）保留但在被封鎖的 IP 上不可用；`python run_backfill_espn.py`（ESPN 備援，僅賽程/比分/逐節，足以做 Elo 回測與半場模型）。皆為 UPSERT，可中斷重跑；ESPN 暫存的 `espn:<id>` 賽事會在 NBA 官方回填時自動認領改寫。回測：`python run_backtest.py --eval-seasons 2`。
 
 ### 踩坑記錄（2026-08 ~ 10）
 
@@ -239,26 +240,36 @@ log loss / Brier 的進步才是穩的。
 h1 margin 8.95 vs 8.96、h1 total 9.87 vs 9.89），上半場勝負方向 61.7% vs 60.9%。規格書「ML 全指標優於 Elo」目前只有勝負達成。
 預測以 `model_version='ml-v1.0'` 寫入 `predictions`（網站顯示最新一筆）；模型存檔於 `pipeline/artifacts/`（gitignore）。
 
+### Phase C.5B — 歷史資料完整度與特徵底座（2026-10）
+
+五季（2021-22 ~ 2025-26）的基本 box score、衍生進階指標、歷史傷病快照都已回填，並建立「賽前特徵」資料層
+（**只建資料層，未重新調模型**）。詳見 [docs/phase-c5b-report.md](docs/phase-c5b-report.md)。
+
+```bash
+cd pipeline
+python -m core.jobs.box_backfill --workers 6      # 五季 box score（NBA CDN；可中斷續傳；--force 重寫已完整場次）
+python -m core.jobs.injury_backfill --shard 1/4   # 歷史傷病報告（可開多個 shard 並行；可續傳）
+python -m core.jobs.derive_metrics                # 補算/重算 team_game_derived（公式版本升級時 --force）
+python -m core.jobs.coverage_audit                # 覆蓋率稽核；--missing team_stats 列出缺漏場次；--json 輸出
+python -m core.jobs.injury_validation             # 傷病狀態 vs 實際出賽（診斷用，不回饋特徵）
+python run_build_features.py --offset 0           # 賽前特徵 → pipeline/artifacts/*.csv.gz
+```
+
+- **Migration**：`migrations/postgres/0003_phase_c5b.sql`（`npm run db:migrate:pg`）。純新增：`team_game_stats` 補原始計數、
+  `team_game_derived`（box-v1 衍生指標）、`injury_reports` / `injury_report_entries`（完整快照）、`source_fetch_log`、`injuries` 唯一約束。
+- **傷病語意**：快照 + 涵蓋範圍 → 賽前最後已知狀態（`core/injury_asof.py`）；球員不再被列出 = `Not Listed`（視同可出賽），
+  該隊 NOT YET SUBMITTED = 無資訊（往前找較早報告），沒有任何報告涵蓋 = `Unknown`。`injuries`（API 讀取的最新狀態）在球員消失時補一列 `Available`。
+- **衍生指標**公式與來源見 `core/metrics.py`；**賽前特徵**定義與洩漏防護見 `core/models/pregame_features.py`。
+
 ## 路線圖 / 保留待辦
 
-### [保留] 補上 box score 與傷病特徵（Phase C 進階，使用者未來想做）
+### [下一步] Phase C.5C：用新資料層重新評估模型
 
-**為什麼**：Phase C 目前只有比賽層級特徵（Elo/休息/近況/交手），與 Elo 高度重疊：勝負僅小幅優於 Elo，
-分差/總分/半場 MAE 與 baseline 幾乎持平（見上方 Phase C 現況）。要有實質提升，需要 Elo 看不到的資訊：
-節奏與攻守效率、球員缺陣。
-
-**前置條件**：本機 IP 被 stats.nba.com 的 Akamai 封鎖 `/stats/*`（見上方踩坑 1）。需要在「未被封鎖的 IP」
-跑 NBA 官方回填：雲端主機（Railway/Fly，之後本來就要搬）、VPN 或手機熱點皆可。DB 是共用的，
-在別處跑 `cd pipeline && python run_backfill.py`（約數小時，可中斷續傳）即可，本機不需任何改動。
-同時需有 Java（nbainjuries 解析 PDF），Dockerfile 已含。
-
-**要做的事**
-1. 回填 box score：`run_backfill.py` 會寫入 `team_game_stats`（pace / off_rtg / def_rtg / ts% / efg% / tov_ratio）
-   與 `player_game_stats`（先發、上場分鐘、plus_minus）。ESPN 暫存賽事 `espn:<id>` 會被自動認領改寫為官方 ID。
-2. 回填歷史傷病：`nbainjuries` 自 2021-22 起有官方報告，需寫一支按日期回補的 job（目前 `daily.py` 只抓最新一份）。
-3. `core/models/ml_features.py` 新增特徵（同樣先 shift(1)，只用賽前資訊）：近 10 場 pace / off_rtg / def_rtg / ts%、
-   「主力缺陣」（最近先發名單中 Out/Doubtful 人數與其分鐘占比）。`core/jobs/backtest.py` 已有先發缺陣計算邏輯可沿用。
-4. 重跑 `run_backtest.py`（Elo 含傷病調整）與 `run_train.py`，比較評測。
+box score / 傷病的資料層已在 C.5B 完成（見上），尚未用於模型。C.5C 要做的事：
+1. 以 `pregame_features.build_pregame_features()` 的特徵重新評估勝負 / 分差 / 總分 / 半場模型（walk-forward，
+   評測賽季只跑一次；特徵選擇只用評測賽季之前的資料）。
+2. 比較 `decision_offset_min`（0 / 60 / 120）對傷病特徵的影響，選定實際預測流程要用的決策時點。
+3. 把傷病/先發特徵接上 `core/jobs/backtest.py`（Elo 傷病調整）與 `predict`。
 
 **驗收**：在 2024-25 + 2025-26 walk-forward 評測上，勝負 accuracy / log loss / Brier 全數優於 Elo，
 且分差/總分/上半場 MAE 優於 baseline。需要超越的基準（2,631 場）：

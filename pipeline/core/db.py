@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -29,7 +30,7 @@ def get_pool() -> ConnectionPool:
         _pool = ConnectionPool(
             settings.database_url,
             min_size=1,
-            max_size=4,
+            max_size=int(os.environ.get("PG_POOL_MAX", "4")),   # Supabase session pooler 全站共用 15 條連線
             kwargs={"row_factory": dict_row, "autocommit": True},
         )
     return _pool
@@ -40,6 +41,15 @@ def cursor() -> Iterator[Any]:
     with get_pool().connection() as conn:
         with conn.cursor() as cur:
             yield cur
+
+
+@contextmanager
+def transaction() -> Iterator[Any]:
+    """多語句原子寫入（連線池預設 autocommit；這裡包成單一交易，失敗整批 rollback）。"""
+    with get_pool().connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                yield cur
 
 
 # ------------------------------------------------------------------ #
@@ -81,6 +91,41 @@ def upsert_player(cur, *, nba_player_id: int, name: str, team_id: int | None,
     return cur.fetchone()["id"]
 
 
+def upsert_player_keep_team(cur, *, nba_player_id: int, name: str, team_id: int | None,
+                            position: str | None = None) -> int:
+    """回填專用：新球員才寫入 team_id；既有球員不覆寫 team_id / is_starter。
+    回填可能亂序（重跑補漏），不能讓舊賽季的 box score 把球員「目前球隊」寫回去；
+    目前球隊由 refresh_player_current_team() 依最新出賽統一回填。"""
+    cur.execute(
+        """
+        INSERT INTO players (nba_player_id, name, team_id, position)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (nba_player_id) DO UPDATE SET
+          name = EXCLUDED.name, position = COALESCE(EXCLUDED.position, players.position)
+        RETURNING id
+        """,
+        (nba_player_id, name, team_id, position),
+    )
+    return cur.fetchone()["id"]
+
+
+def refresh_player_current_team(cur) -> int:
+    """players.team_id / is_starter ← 該球員「最近一場出賽」的球隊與先發旗標（與出賽順序無關，冪等）。"""
+    cur.execute(
+        """
+        UPDATE players p SET team_id = l.team_id, is_starter = COALESCE(l.started, 0)
+          FROM (
+            SELECT DISTINCT ON (s.player_id) s.player_id, s.team_id, s.started
+              FROM player_game_stats s JOIN games g ON g.id = s.game_id
+             ORDER BY s.player_id, g.date_utc DESC, g.id DESC
+          ) l
+         WHERE p.id = l.player_id
+           AND (p.team_id IS DISTINCT FROM l.team_id OR p.is_starter IS DISTINCT FROM COALESCE(l.started, 0))
+        """
+    )
+    return cur.rowcount
+
+
 def get_team_id_by_nba_id(cur, nba_team_id: int) -> int | None:
     cur.execute("SELECT id FROM teams WHERE nba_team_id = %s", (nba_team_id,))
     row = cur.fetchone()
@@ -120,16 +165,22 @@ def upsert_game(cur, *, nba_game_id: str, **fields: Any) -> int:
 
 def adopt_espn_game(cur, *, nba_game_id: str, home_team_id: int, away_team_id: int, date_utc: str) -> None:
     """ESPN 備援回填暫存的 'espn:<id>' 賽事，在 NBA 官方資料到手時改寫為真正的
-    nba_game_id（以主客隊 + 日期±1 天認領），避免同一場比賽出現兩列。"""
+    nba_game_id（以主客隊 + 日期±1 天認領），避免同一場比賽出現兩列。
+
+    只認領「開賽時間最接近」的**一列**：同一對主客隊可能連續兩天主場對打
+    （例：2021-11-26 / 27 UTA vs NOP），舊版 UPDATE 會同時命中兩列而違反 UNIQUE(nba_game_id)。"""
     cur.execute(
         """
         UPDATE games SET nba_game_id = %s
-         WHERE nba_game_id LIKE 'espn:%%'
-           AND home_team_id = %s AND away_team_id = %s
-           AND date_utc BETWEEN %s::timestamptz - interval '1 day' AND %s::timestamptz + interval '1 day'
+         WHERE id = (
+               SELECT id FROM games
+                WHERE nba_game_id LIKE 'espn:%%'
+                  AND home_team_id = %s AND away_team_id = %s
+                  AND date_utc BETWEEN %s::timestamptz - interval '1 day' AND %s::timestamptz + interval '1 day'
+                ORDER BY abs(extract(epoch FROM (date_utc - %s::timestamptz))) LIMIT 1)
            AND NOT EXISTS (SELECT 1 FROM games WHERE nba_game_id = %s)
         """,
-        (nba_game_id, home_team_id, away_team_id, date_utc, date_utc, nba_game_id),
+        (nba_game_id, home_team_id, away_team_id, date_utc, date_utc, date_utc, nba_game_id),
     )
 
 
@@ -162,6 +213,7 @@ TEAM_STATS_COLUMNS = [
     "is_home", "pts", "fg_pct", "fg3_pct", "ft_pct", "reb", "oreb", "dreb",
     "ast", "stl", "blk", "tov", "pf", "pace", "off_rtg", "def_rtg", "net_rtg",
     "ts_pct", "efg_pct", "ast_ratio", "tov_ratio",
+    "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "team_min",
 ]
 
 
@@ -204,6 +256,43 @@ def upsert_player_game_stats(cur, *, game_id: int, player_id: int, team_id: int 
     )
 
 
+def upsert_team_derived(cur, *, game_id: int, team_id: int, formula_version: str, **metrics: Any) -> None:
+    cols = list(metrics)
+    col_list = ", ".join(["game_id", "team_id", "formula_version", "computed_at"] + cols)
+    ph = ", ".join(["%s"] * 3 + ["NOW()"] + ["%s"] * len(cols))
+    update_set = ", ".join(["formula_version = EXCLUDED.formula_version", "computed_at = NOW()"]
+                           + [f"{c} = EXCLUDED.{c}" for c in cols])
+    cur.execute(
+        f"""
+        INSERT INTO team_game_derived ({col_list}) VALUES ({ph})
+        ON CONFLICT (game_id, team_id) DO UPDATE SET {update_set}
+        """,
+        [game_id, team_id, formula_version] + [metrics[c] for c in cols],
+    )
+
+
+# ------------------------------------------------------------------ #
+# 來源抓取紀錄（回填續傳 / 缺漏定位）                                     #
+# ------------------------------------------------------------------ #
+
+def log_fetch(cur, *, kind: str, key: str, status: str, error: str | None = None) -> None:
+    cur.execute(
+        """
+        INSERT INTO source_fetch_log (kind, key, status, attempts, last_error, updated_at)
+        VALUES (%s, %s, %s, 1, %s, NOW())
+        ON CONFLICT (kind, key) DO UPDATE SET
+          status = EXCLUDED.status, last_error = EXCLUDED.last_error, updated_at = NOW(),
+          attempts = source_fetch_log.attempts + 1
+        """,
+        (kind, key, status, (error or None) and error[:500]),
+    )
+
+
+def fetch_log_keys(cur, kind: str, statuses: tuple[str, ...]) -> set[str]:
+    cur.execute("SELECT key FROM source_fetch_log WHERE kind = %s AND status = ANY(%s)", (kind, list(statuses)))
+    return {r["key"] for r in cur.fetchall()}
+
+
 # ------------------------------------------------------------------ #
 # Injuries（只在狀態變化時新增一列，保留申報歷史）                       #
 # ------------------------------------------------------------------ #
@@ -236,14 +325,16 @@ def insert_injury_if_changed(cur, *, report_time_utc, player_id: int,
     last = cur.fetchone()
     if last and last["status"] == status and (last["reason"] or "") == (reason or ""):
         return False
+    # uq_injuries_report_player：兩個行程同時寫同一報告時，輸的一方 DO NOTHING，不會雙寫
     cur.execute(
         """
         INSERT INTO injuries (report_time_utc, player_id, team_id, game_id, status, reason, source)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (source, report_time_utc, player_id) DO NOTHING
         """,
         (report_time_utc, player_id, team_id, game_id, status, reason, source),
     )
-    return True
+    return cur.rowcount == 1
 
 
 # ------------------------------------------------------------------ #

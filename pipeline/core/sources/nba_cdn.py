@@ -58,6 +58,33 @@ def _get_json(url: str) -> dict:
     return resp.json()
 
 
+class NotFound(Exception):
+    """cdn.nba.com 對不存在的檔案回 403/404（S3 風格）。與暫時性錯誤區分：不重試。"""
+
+    def __init__(self, url: str, status: int):
+        super().__init__(f"{status} {url}")
+        self.url, self.status = url, status
+
+
+_transient = retry(
+    reraise=True,
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout, ValueError)),
+)
+
+
+@_transient
+def get_json_or_notfound(url: str, session: requests.Session | None = None) -> dict:
+    """403/404 → NotFound（不重試）；429/5xx → requests.HTTPError（由呼叫端決定是否降速）；
+    連線/逾時/JSON 解析失敗 → 重試。"""
+    resp = (session or requests).get(url, headers=_headers(), timeout=REQUEST_TIMEOUT)
+    if resp.status_code in (403, 404):
+        raise NotFound(url, resp.status_code)
+    resp.raise_for_status()
+    return resp.json()
+
+
 # ------------------------------------------------------------------ #
 # 賽程 / 比分                                                           #
 # ------------------------------------------------------------------ #
@@ -134,14 +161,34 @@ def parse_iso_minutes(m: str | None) -> float | None:
         return None
 
 
+def _total(s: dict, personal: str, team: str, total: str | None = None) -> int | None:
+    """球隊失誤：官方球隊 TOV 含「球隊失誤」（turnoversTeam），CDN 的 turnovers 只有球員個人，
+    要用 turnoversTotal（= 個人 + 球隊）。2021-22 例行賽驗證：13.76 次/隊/場，與聯盟平均一致。"""
+    if total and s.get(total) is not None:
+        return s[total]
+    if s.get(personal) is None:
+        return None
+    return s[personal] + (s.get(team) or 0)
+
+
 def shape_box_side(side: dict) -> dict[str, Any]:
     s = side.get("statistics", {})
     team = {
         "pts": s.get("points"), "fg_pct": s.get("fieldGoalsPercentage"),
         "fg3_pct": s.get("threePointersPercentage"), "ft_pct": s.get("freeThrowsPercentage"),
-        "reb": s.get("reboundsTotal"), "oreb": s.get("reboundsOffensive"),
-        "dreb": s.get("reboundsDefensive"), "ast": s.get("assists"), "stl": s.get("steals"),
-        "blk": s.get("blocks"), "tov": s.get("turnovers"), "pf": s.get("foulsPersonal"),
+        # 籃板只算球員個人（reboundsPersonal / Offensive / Defensive）：官方球隊 REB 不含「球隊籃板」。
+        # CDN 的 reboundsTotal 含球隊籃板（2021-22 平均 52.4 次/隊/場，聯盟真實約 44），若用它算
+        # ORB%/控球數會把 pace 低估約 4%（94.4 vs 官方 98.2）——C.5B 實測發現並修正。
+        "reb": s.get("reboundsPersonal") if s.get("reboundsPersonal") is not None else s.get("reboundsTotal"),
+        "oreb": s.get("reboundsOffensive"),
+        "dreb": s.get("reboundsDefensive"),
+        "ast": s.get("assists"), "stl": s.get("steals"), "blk": s.get("blocks"),
+        "tov": _total(s, "turnovers", "turnoversTeam", "turnoversTotal"),   # 含球隊失誤
+        "pf": s.get("foulsPersonal"),
+        "fgm": s.get("fieldGoalsMade"), "fga": s.get("fieldGoalsAttempted"),
+        "fg3m": s.get("threePointersMade"), "fg3a": s.get("threePointersAttempted"),
+        "ftm": s.get("freeThrowsMade"), "fta": s.get("freeThrowsAttempted"),
+        "team_min": parse_iso_minutes(s.get("minutes")),
     }
     players = []
     for p in side.get("players", []):
@@ -165,11 +212,14 @@ def shape_box_side(side: dict) -> dict[str, Any]:
     return {"team": team, "players": players, "periods": side.get("periods", [])}
 
 
-def fetch_box_basic(nba_game_id: str) -> dict:
-    """與 nba_stats.fetch_box_traditional 相同的資料形狀，另外附 quarters（逐節/半場）。"""
-    game = _get_json(BOXSCORE_URL.format(game_id=nba_game_id))["game"]
+def box_from_game(game: dict) -> dict:
+    """boxscore_<id>.json 的 `game` 節點 → 統一形狀（與 nba_stats.fetch_box_traditional 相容，另附 meta/quarters）。"""
     home, away = shape_box_side(game["homeTeam"]), shape_box_side(game["awayTeam"])
     return {
+        "nba_game_id": game.get("gameId"),
+        "date_utc": parse_utc(game.get("gameTimeUTC")),
+        "status": GAME_STATUS_MAP.get(game.get("gameStatus"), "scheduled"),
+        "arena": (game.get("arena") or {}).get("arenaName"),
         "home_team_id": game["homeTeam"]["teamId"],
         "away_team_id": game["awayTeam"]["teamId"],
         "home": home,
@@ -177,3 +227,10 @@ def fetch_box_basic(nba_game_id: str) -> dict:
         "quarters": {**quarters_from_periods("home", home["periods"]),
                      **quarters_from_periods("away", away["periods"])},
     }
+
+
+def fetch_box_basic(nba_game_id: str, session: requests.Session | None = None) -> dict:
+    """與 nba_stats.fetch_box_traditional 相同的資料形狀，另外附 quarters（逐節/半場）與 meta。
+    檔案不存在 → NotFound（回填用來區分「沒有這場」與暫時性錯誤）。"""
+    url = BOXSCORE_URL.format(game_id=nba_game_id)
+    return box_from_game(get_json_or_notfound(url, session)["game"])

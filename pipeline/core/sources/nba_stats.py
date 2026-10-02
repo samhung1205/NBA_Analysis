@@ -220,6 +220,11 @@ def _shape_traditional_side(side: dict) -> dict:
         "reb": s.get("reboundsTotal"), "oreb": s.get("reboundsOffensive"),
         "dreb": s.get("reboundsDefensive"), "ast": s.get("assists"), "stl": s.get("steals"),
         "blk": s.get("blocks"), "tov": s.get("turnovers"), "pf": s.get("foulsPersonal"),
+        # C.5B：衍生進階指標（eFG/TS/控球數）需要的原始計數；與 CDN 路徑同欄位，fallback 時也能算
+        "fgm": s.get("fieldGoalsMade"), "fga": s.get("fieldGoalsAttempted"),
+        "fg3m": s.get("threePointersMade"), "fg3a": s.get("threePointersAttempted"),
+        "ftm": s.get("freeThrowsMade"), "fta": s.get("freeThrowsAttempted"),
+        "team_min": _minutes_to_float(s.get("minutes")),
     }
     players = []
     for p in side.get("players", []):

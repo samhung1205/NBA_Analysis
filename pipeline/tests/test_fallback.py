@@ -299,7 +299,9 @@ def _final_game_in_db(db, seeded):
 
 
 def _box():
-    side = lambda pid, name: {"team": {"pts": 100, "reb": 40}, "players": [
+    side = lambda pid, name: {"team": {"pts": 100, "reb": 40, "oreb": 10, "dreb": 30, "ast": 20, "tov": 12,
+                                       "fgm": 38, "fga": 85, "fg3m": 10, "fg3a": 30, "ftm": 14, "fta": 18,
+                                       "team_min": 240.0}, "players": [
         {"nba_player_id": pid, "name": name, "position": "SF", "started": 1, "min": 30.0, "pts": 20,
          "reb": 5, "ast": 5, "stl": 1, "blk": 0, "tov": 2, "fgm": 8, "fga": 15, "fg3m": 2, "fg3a": 5,
          "ftm": 2, "fta": 2, "plus_minus": 5.0}]}

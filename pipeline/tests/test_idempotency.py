@@ -98,7 +98,9 @@ def test_injury_duplicate_ingestion_same_snapshot(seeded, db):
     assert res == [True, False, False, False] and count(db, "injuries") == 1
 
 
-def test_injury_two_games_same_report_both_kept_and_rerun_stable(seeded, db):
+def test_injury_same_report_same_player_is_unique_even_with_different_status(seeded, db):
+    """C.5B：uq_injuries_report_player — 同一份報告對同一球員最多一列（多賽事日由快照表保存，
+    injuries 只放「最近賽事日」的最新狀態）；先寫入者勝，後者被 ON CONFLICT 吸收，重跑穩定。"""
     with db.cursor() as cur:
         cur.execute("SELECT id FROM players WHERE name = 'Jaylen Brown'")
         pid = cur.fetchone()["id"]
@@ -106,6 +108,6 @@ def test_injury_two_games_same_report_both_kept_and_rerun_stable(seeded, db):
             return db.insert_injury_if_changed(cur, report_time_utc=utc(2026, 1, 15, 22), player_id=pid,
                                                team_id=seeded["BOS"], game_id=None, status=status,
                                                reason=reason, source="nba_official")
-        assert [put("Questionable", "Knee"), put("Out", "Rest")] == [True, True]
+        assert [put("Questionable", "Knee"), put("Out", "Rest")] == [True, False]
         assert [put("Questionable", "Knee"), put("Out", "Rest")] == [False, False]
-    assert count(db, "injuries") == 2
+    assert count(db, "injuries") == 1
