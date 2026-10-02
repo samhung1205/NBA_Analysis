@@ -154,7 +154,8 @@ npm run db:reset:local     # 重置本機資料庫
 - ✅ **Phase A** 資料基礎：fetcher、排程器、回填（C.5A 另做了來源 fallback / 排程 / 傷病硬化）
 - ✅ **Phase B** Baseline：特徵工程、Elo walk-forward 回測
 - ✅ **Phase C.5B** 歷史資料完整度：五季 box score / 衍生進階指標 / 歷史傷病快照 / 賽前特徵底座（見下方「Phase C.5B」）
-- 🟡 **Phase C** ML：勝負達標；分差/總分/上半場尚未優於 baseline（見下方「Phase C 現況」）
+- ✅ **Phase C.5C** 時間尺度特徵 + walk-forward 重新評估：勝負與分差/總分/上半場**全部**優於 Elo / baseline（評估完成，尚未上線；見下方「Phase C.5C」）
+- 🟡 **Phase C** ML：線上仍是 ml-v1.0（只有勝負達標）；C.5C 的新模型留待 C.5D 上線
 
 ### 尚未實作
 
@@ -178,7 +179,7 @@ npm run db:reset:local     # 重置本機資料庫
 
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
-3. Phase C.5C（用 C.5B 資料層重新評估模型）→ 再進 Phase D
+3. Phase C.5D（C.5C 模型上線：production inference）→ 再進 Phase D
 
 ## 待與使用者確認的事項
 
@@ -261,9 +262,28 @@ python run_build_features.py --offset 0           # 賽前特徵 → pipeline/ar
   該隊 NOT YET SUBMITTED = 無資訊（往前找較早報告），沒有任何報告涵蓋 = `Unknown`。`injuries`（API 讀取的最新狀態）在球員消失時補一列 `Available`。
 - **衍生指標**公式與來源見 `core/metrics.py`；**賽前特徵**定義與洩漏防護見 `core/models/pregame_features.py`。
 
+### Phase C.5C — 時間尺度建模與 walk-forward 重新評估（2026-10）
+
+以「本季這支球隊」為主體重建特徵（pregame-v2：本季 / l20 / l10 / l5、上季先驗 + 經驗收縮、名單延續性、walk-forward 校準的傷病缺陣機率、
+分鐘加權可用性），在 2024-25 + 2025-26（2,631 場）只跑一次的 walk-forward 評測。詳見 [docs/phase-c5c-report.md](docs/phase-c5c-report.md)。
+
+| 2,631 場 | Elo / baseline | Phase C | **C.5C 選定模型** |
+|---|---|---|---|
+| 勝負 log loss / Brier / acc | 0.6221 / 0.2150 / 0.6697 | 0.6046 / 0.2088 / 0.6724 | **0.5922 / 0.2036 / 0.6792** |
+| 分差 MAE | 11.34 | 11.39 | **10.98** |
+| 總分 MAE | 15.22 | 15.25 | **14.93** |
+| 上半場分差 / 總分 MAE | 8.96 / 9.89 | 8.95 / 9.87 | **8.87 / 9.64** |
+
+兩個評測賽季單獨看也都較好。勝負/分差的改善主要來自傷病與球員可用性，總分類來自本季節奏/得失分；上季先驗/名單延續性只有很小的增量；
+XGBoost 在驗證賽季全數輸給邏輯迴歸 / Ridge，未採用。`cd pipeline && python -m core.jobs.c5c_evaluate`（只評測，不寫 DB）。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase C.5C：用新資料層重新評估模型
+### [下一步] Phase C.5D：C.5C 模型的 production inference
+
+以 C.5C 選定的模型與 pregame-v2 特徵產生實際預測（傷病校準器狀態持久化、定期重訓、開季名單延續性未知的處理），見 C.5C 報告 §14。
+
+### [已完成] Phase C.5C：用新資料層重新評估模型
 
 box score / 傷病的資料層已在 C.5B 完成（見上），尚未用於模型。C.5C 要做的事：
 1. 以 `pregame_features.build_pregame_features()` 的特徵重新評估勝負 / 分差 / 總分 / 半場模型（walk-forward，

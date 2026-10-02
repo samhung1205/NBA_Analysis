@@ -11,7 +11,10 @@
 
 特徵（side = home / away；N = 5, 10 為「該隊過去 N 場」，跨賽季連續計算，不足 3 場為 NaN）
   {side}_{m}_r{N}        m ∈ pace, ortg, drtg, net_rtg, efg_pct, ts_pct, tov_pct, orb_pct, drb_pct, ftr, fg3a_rate
-                         （box-v1 衍生指標，見 core/metrics.py）
+                         （box-v1 衍生指標，見 core/metrics.py）。注意：pace / ortg / drtg / net_rtg 是由基本 box score
+                         以公式「估計」的值，不是 stats.nba.com 官方 advanced；v2（temporal_features.py）已改名為
+                         est_pace / est_off_rtg / est_def_rtg / est_net_rtg。v1 欄名保留以免舊輸出檔失效。
+                         v1 的窗口跨賽季連續（季初 r5/r10 = 上季最後幾場），C.5C 改用 v2 的本季窗口 + 上季先驗。
   {side}_opp_{m}_r{N}    m ∈ efg_pct, tov_pct, ftr, orb_pct：對手在該隊比賽中的表現（防守面）
   {side}_starter_min_r5  該隊過去 5 場先發球員的平均上場分鐘
   {side}_rot_size_r10    過去 10 場平均每場上場 ≥10 分鐘的球員數
