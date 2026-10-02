@@ -50,3 +50,53 @@ def fetch_scoreboard(yyyymmdd: str) -> list[dict]:
             "away_linescores": [int(float(ls["value"])) for ls in away.get("linescores", [])],
         })
     return out
+
+
+# ------------------------------------------------------------------ #
+# fallback 鏈用：轉成與 NBA CDN 相同的正規化 game dict                    #
+# ------------------------------------------------------------------ #
+
+ESPN_STATUS = {"STATUS_FINAL": "final", "STATUS_SCHEDULED": "scheduled", "STATUS_IN_PROGRESS": "live",
+               "STATUS_HALFTIME": "live", "STATUS_END_PERIOD": "live"}
+
+
+def normalize_event(ev: dict) -> dict | None:
+    from ..timeutil import parse_utc
+    from .common import quarters_from_periods
+
+    stage = STAGE_BY_TYPE.get(ev.get("season_type"))
+    status = ESPN_STATUS.get(ev.get("status"))
+    when = parse_utc(ev.get("date_utc"))
+    if not stage or not status or not when:
+        return None  # 季前賽 / 明星賽 / 延賽 / 取消
+    out = {
+        "nba_game_id": f"espn:{ev['espn_event_id']}",
+        "source": "espn",
+        "season": f"{when.year if when.month >= 10 else when.year - 1}-"
+                  f"{str((when.year if when.month >= 10 else when.year - 1) + 1)[-2:]}",
+        "season_stage": stage,
+        "date_utc": when,
+        "status": status,
+        "home_nba_team_id": None, "away_nba_team_id": None,   # ESPN 無 NBA team id，以縮寫對應
+        "home_abbr": ev["home_abbr"], "away_abbr": ev["away_abbr"],
+        "home_pts": ev["home_score"] if status != "scheduled" else None,
+        "away_pts": ev["away_score"] if status != "scheduled" else None,
+    }
+    if status == "final":
+        out.update(quarters_from_periods(
+            "home", [{"period": i + 1, "score": s} for i, s in enumerate(ev["home_linescores"])]))
+        out.update(quarters_from_periods(
+            "away", [{"period": i + 1, "score": s} for i, s in enumerate(ev["away_linescores"])]))
+    return out
+
+
+def fetch_games_for_et_dates(et_dates) -> list[dict]:
+    """ESPN scoreboard 以日期（美東日曆日）查詢；以 event id 去重，
+    是否落在刷新視窗由呼叫端依 game_time_utc 過濾。"""
+    seen: dict[str, dict] = {}
+    for d in et_dates:
+        for ev in fetch_scoreboard(d.strftime("%Y%m%d")):
+            g = normalize_event(ev)
+            if g:
+                seen[g["nba_game_id"]] = g
+    return list(seen.values())

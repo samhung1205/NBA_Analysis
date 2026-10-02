@@ -133,6 +133,21 @@ def adopt_espn_game(cur, *, nba_game_id: str, home_team_id: int, away_team_id: i
     )
 
 
+def find_game_by_matchup(cur, *, home_team_id: int, away_team_id: int, date_utc) -> dict | None:
+    """以主客隊 + 開賽時間（±12 小時）找既有賽事，不論其 nba_game_id 是官方或 'espn:' 暫存。
+    供 ESPN 備援寫入時避免與官方來源已建立的賽事重複。"""
+    cur.execute(
+        """
+        SELECT id, nba_game_id, status FROM games
+         WHERE home_team_id = %s AND away_team_id = %s
+           AND date_utc BETWEEN %s::timestamptz - interval '12 hours' AND %s::timestamptz + interval '12 hours'
+         ORDER BY abs(extract(epoch FROM (date_utc - %s::timestamptz))) LIMIT 1
+        """,
+        (home_team_id, away_team_id, date_utc, date_utc, date_utc),
+    )
+    return cur.fetchone()
+
+
 def get_game_id_by_nba_id(cur, nba_game_id: str) -> int | None:
     cur.execute("SELECT id FROM games WHERE nba_game_id = %s", (nba_game_id,))
     row = cur.fetchone()
@@ -193,16 +208,30 @@ def upsert_player_game_stats(cur, *, game_id: int, player_id: int, team_id: int 
 # Injuries（只在狀態變化時新增一列，保留申報歷史）                       #
 # ------------------------------------------------------------------ #
 
-def insert_injury_if_changed(cur, *, report_time_utc: str, player_id: int,
+def insert_injury_if_changed(cur, *, report_time_utc, player_id: int,
                               team_id: int | None, game_id: int | None,
                               status: str, reason: str | None, source: str) -> bool:
+    """冪等：同一份報告（report_time_utc）重跑多少次都不會重複寫入；
+    且是否「有變化」是和**該報告時間之前**的最近一筆比較（而非全表最新一筆），
+    所以補抓/亂序重跑舊報告也不會產生假的狀態翻轉。回傳是否真的新增一列。"""
+    cur.execute(
+        """
+        SELECT 1 FROM injuries
+         WHERE player_id = %s AND report_time_utc = %s AND source = %s
+           AND status = %s AND COALESCE(reason, '') = %s
+         LIMIT 1
+        """,
+        (player_id, report_time_utc, source, status, reason or ""),
+    )
+    if cur.fetchone():
+        return False
     cur.execute(
         """
         SELECT status, reason FROM injuries
-         WHERE player_id = %s
-         ORDER BY report_time_utc DESC LIMIT 1
+         WHERE player_id = %s AND source = %s AND report_time_utc < %s
+         ORDER BY report_time_utc DESC, id DESC LIMIT 1
         """,
-        (player_id,),
+        (player_id, source, report_time_utc),
     )
     last = cur.fetchone()
     if last and last["status"] == status and (last["reason"] or "") == (reason or ""):

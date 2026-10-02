@@ -19,12 +19,15 @@ from __future__ import annotations
 import logging
 import random
 import time
+from datetime import date
 from typing import Any, Iterable
 
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ..config import settings
+from ..timeutil import parse_utc
+from .common import GAME_STATUS_MAP, quarters_from_periods, season_from_game_id, stage_from_game_id
 
 log = logging.getLogger(__name__)
 
@@ -46,21 +49,16 @@ TEAM_META: dict[str, tuple[str, str]] = {
     "NOP": ("West", "Southwest"), "SAS": ("West", "Southwest"),
 }
 
-GAME_STATUS_MAP = {1: "scheduled", 2: "live", 3: "final"}
-
-
 def _sleep_polite() -> None:
     time.sleep(random.uniform(settings.nba_api_min_delay, settings.nba_api_max_delay))
 
 
-def _headers() -> dict:
-    """與 nba_api 預設的完整瀏覽器偽裝標頭合併，只覆寫 User-Agent。
-    2026-08 踩坑記錄：曾經直接回傳只有 User-Agent 的字典整個取代預設值，
-    導致遺漏 Referer/Accept/Sec-Ch-Ua 等標頭，被 stats.nba.com 判定為
-    非瀏覽器來源請求，造成請求持續逾時（而不會回傳明確的錯誤狀態碼）。"""
-    from nba_api.stats.library.http import NBAStatsHTTP
-
-    return {**NBAStatsHTTP.headers, "User-Agent": settings.nba_api_user_agent}
+# 標頭一律沿用 nba_api 內建的完整預設值（NBAStatsHTTP.headers，含 Referer / Sec-Ch-Ua 等，
+# 且 UA 與 Sec-Ch-Ua 版本互相一致）。**不要**再傳 headers= 或覆寫 User-Agent：
+#   - 傳 headers= 會整個取代預設值（遺失 Referer 等）；
+#   - 舊版曾把 UA 覆寫為 Chrome 120，但預設 Sec-Ch-Ua 宣告 Chrome 145，
+#     UA / client-hints 互相矛盾，是比缺少標頭更容易被 Akamai 判為偽造的訊號。
+# 偽裝相關的調整只允許走「升級 nba_api」這條路。
 
 
 _retry = retry(
@@ -104,7 +102,6 @@ def fetch_season_team_games(season: str, season_type: str = "Regular Season") ->
         season_nullable=season,
         league_id_nullable="00",
         season_type_nullable=season_type,
-        headers=_headers(),
         timeout=REQUEST_TIMEOUT,
     )
     return r.get_data_frames()[0]
@@ -129,7 +126,7 @@ def fetch_scoreboard_day(date_str: str, season: str, season_stage: str) -> list[
     from nba_api.stats.endpoints import scoreboardv3
 
     _sleep_polite()
-    r = scoreboardv3.ScoreboardV3(game_date=date_str, headers=_headers(), timeout=REQUEST_TIMEOUT)
+    r = scoreboardv3.ScoreboardV3(game_date=date_str, timeout=REQUEST_TIMEOUT)
     raw = r.get_dict()
     out = []
     for g in raw.get("scoreboard", {}).get("games", []):
@@ -149,27 +146,49 @@ def fetch_scoreboard_day(date_str: str, season: str, season_stage: str) -> list[
     return out
 
 
-def _periods_to_quarters(side: str, team: dict) -> dict:
-    periods = team.get("periods", [])
-    q = {f"{side}_q{i}": None for i in range(1, 5)}
-    ot = 0
-    for p in periods:
-        n = p.get("period")
-        score = p.get("score")
-        if 1 <= n <= 4:
-            q[f"{side}_q{n}"] = score
-        elif n >= 5:
-            ot += score or 0
-    q[f"{side}_ot"] = ot if any(p.get("period", 0) >= 5 for p in periods) else None
-    q[f"{side}_h1"] = _sum_or_none(q[f"{side}_q1"], q[f"{side}_q2"])
-    q[f"{side}_h2"] = _sum_or_none(q[f"{side}_q3"], q[f"{side}_q4"])
-    return q
-
-
-def _sum_or_none(a, b):
-    if a is None or b is None:
+def normalize_scoreboard_game(g: dict) -> dict | None:
+    """ScoreboardV3 → 與 CDN 相同的正規化 game dict（季前賽/明星賽回傳 None）。"""
+    gid = g.get("gameId")
+    stage = stage_from_game_id(gid) if gid else None
+    when = parse_utc(g.get("gameTimeUTC"))
+    home, away = g.get("homeTeam") or {}, g.get("awayTeam") or {}
+    if not stage or not when or not home.get("teamId") or not away.get("teamId"):
         return None
-    return a + b
+    status = GAME_STATUS_MAP.get(g.get("gameStatus"), "scheduled")
+    return {
+        "nba_game_id": gid, "source": "nba_api", "season": season_from_game_id(gid),
+        "season_stage": stage, "date_utc": when, "status": status,
+        "home_nba_team_id": home["teamId"], "away_nba_team_id": away["teamId"],
+        "home_abbr": home.get("teamTricode"), "away_abbr": away.get("teamTricode"),
+        "home_pts": (home.get("score") or None) if status != "scheduled" else None,
+        "away_pts": (away.get("score") or None) if status != "scheduled" else None,
+        **quarters_from_periods("home", home.get("periods", [])),
+        **quarters_from_periods("away", away.get("periods", [])),
+    }
+
+
+def fetch_games_for_et_dates(et_dates: Iterable[date]) -> list[dict]:
+    """逐個美東日期查 ScoreboardV3。fallback 鏈內使用：每日期只重試 2 次、任一日期失敗就
+    整體失敗（交給 fallback/斷路器處理，避免被封鎖時 N 天 × 4 次重試空等）。"""
+    from nba_api.stats.endpoints import scoreboardv3
+
+    @retry(reraise=True, stop=stop_after_attempt(2), wait=wait_exponential(multiplier=2, min=2, max=10))
+    def one_day(d: date) -> dict:
+        _sleep_polite()
+        return scoreboardv3.ScoreboardV3(
+            game_date=d.isoformat(), timeout=REQUEST_TIMEOUT).get_dict()
+
+    out = []
+    for d in et_dates:
+        for g in one_day(d).get("scoreboard", {}).get("games", []):
+            n = normalize_scoreboard_game(g)
+            if n:
+                out.append(n)
+    return out
+
+
+def _periods_to_quarters(side: str, team: dict) -> dict:
+    return quarters_from_periods(side, team.get("periods", []))
 
 
 # ------------------------------------------------------------------ #
@@ -182,7 +201,7 @@ def fetch_box_traditional(nba_game_id: str) -> dict:
 
     _sleep_polite()
     r = boxscoretraditionalv3.BoxScoreTraditionalV3(
-        game_id=nba_game_id, headers=_headers(), timeout=REQUEST_TIMEOUT
+        game_id=nba_game_id, timeout=REQUEST_TIMEOUT
     )
     box = r.get_dict()["boxScoreTraditional"]
     return {
@@ -239,7 +258,7 @@ def fetch_box_advanced(nba_game_id: str) -> dict:
 
     _sleep_polite()
     r = boxscoreadvancedv3.BoxScoreAdvancedV3(
-        game_id=nba_game_id, headers=_headers(), timeout=REQUEST_TIMEOUT
+        game_id=nba_game_id, timeout=REQUEST_TIMEOUT
     )
     box = r.get_dict()["boxScoreAdvanced"]
     return {

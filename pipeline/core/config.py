@@ -36,10 +36,6 @@ class Settings:
     database_url: str
     odds_api_key: str | None = field(default=None)
     balldontlie_api_key: str | None = field(default=None)
-    nba_api_user_agent: str = field(
-        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    )
     nba_api_min_delay: float = field(default=1.5)
     nba_api_max_delay: float = field(default=4.0)
     twsport_base_url: str | None = field(default=None)
@@ -59,7 +55,6 @@ def load_settings() -> Settings:
         database_url=database_url,
         odds_api_key=_env("ODDS_API_KEY") or None,
         balldontlie_api_key=_env("BALLDONTLIE_API_KEY") or None,
-        nba_api_user_agent=_env("NBA_API_USER_AGENT") or Settings.nba_api_user_agent,
         nba_api_min_delay=_env_float("NBA_API_MIN_DELAY", 1.5),
         nba_api_max_delay=_env_float("NBA_API_MAX_DELAY", 4.0),
         twsport_base_url=_env("TWSPORT_BASE_URL") or None,

@@ -6,7 +6,7 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（未實作，交給 Claude Code）：Python 資料擷取、爬蟲、排程與 ML 預測引擎。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C 已實作，Phase D（盤口）起尚未。
 
 ## 目前完成的功能
 
@@ -44,6 +44,9 @@
 ```bash
 npm run test:api        # 90 項檢查，需服務已啟動
 ```
+> ⚠️ 這組檢查依賴 **seed 測試資料**（明日 3 場、今日進行中等）。正式 Supabase 已回填真實賽事、seed 賽事已清除，
+> 對它執行會有「games=0」類失敗，屬預期。請對本機 D1 seed 執行（`npm run db:reset:local`，並暫時不要讓 `.dev.vars`
+> 的 `DATABASE_URL` 生效，例如啟動時改用 `--binding SESSION_SECRET=...`）。
 涵蓋：6 個頁面渲染、全部 API 契約、edge/Kelly 計算、抽水 > 0、授權保護（401）、
 bets 寫入→讀回→結算→刪除、ROI 以台彩實際賠率計算、404/400 錯誤處理。
 **目前結果：90 通過 / 0 失敗。**
@@ -144,15 +147,16 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-08-01
+- **最後更新**：2026-10-02
 
-## 尚未實作（階段二範圍）
+## 階段二進度
 
-全部屬於規格書 §4 階段二，需 Python 環境：
+- ✅ **Phase A** 資料基礎：fetcher、排程器、回填（C.5A 另做了來源 fallback / 排程 / 傷病硬化）
+- ✅ **Phase B** Baseline：特徵工程、Elo walk-forward 回測
+- 🟡 **Phase C** ML：勝負達標；分差/總分/上半場尚未優於 baseline（見下方「Phase C 現況」）
 
-- **Phase A** 資料基礎：`nba_api` / `nbainjuries` / ESPN fetcher、排程器（APScheduler）、回填近 5 季歷史
-- **Phase B** Baseline：特徵工程 pipeline、Elo 模型 + walk-forward 回測（驗收 accuracy ≥ 63%）
-- **Phase C** ML：XGBoost 勝負/分差/總分 + 機率校準、上半場獨立迴歸模型
+### 尚未實作
+
 - **Phase D** 盤口與價值：台灣運彩 Playwright 爬蟲、The Odds API 整合、Edge/Kelly 精算、ROI 回測
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
@@ -171,9 +175,9 @@ npm run db:reset:local     # 重置本機資料庫
 
 ### 建議下一步
 
-1. **（阻塞中）建立 Supabase Postgres**，執行 `npm run db:migrate:pg`，設定 `DATABASE_URL` secret 後部署
-2. 部署到 Cloudflare Pages 並驗證線上環境
-3. 開始階段二 Phase A：Python 專案 + `nba_api` fetcher + 排程器，共用同一組 `.env`（見 `.env.example`）
+1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
+2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
+3. Phase C.5B（box score / 傷病回填）→ 重跑 Phase C，再進 Phase D
 
 ## 待與使用者確認的事項
 
@@ -193,9 +197,28 @@ npm run db:reset:local     # 重置本機資料庫
 
 1. **`stats.nba.com/stats/*` 對部分 IP 會被 Akamai 靜默丟棄請求**：DNS/TCP/TLS 皆正常（~30ms），但 HTTP 請求零回應位元組（curl `ttfb=0`，IPv4/IPv6 皆同），而站台根路徑、`www.nba.com` 正常。非程式問題，換 IP（雲端主機/VPN/熱點）或改用 ESPN 備援。排查方式：`curl -4 -m 15 -w "%{time_connect} %{time_appconnect} %{time_starttransfer}\n" -o /dev/null -H "Referer: https://www.nba.com/" "https://stats.nba.com/stats/scoreboardv3?GameDate=2025-02-01&LeagueID=00"`。
 2. **ESPN**：不可偽造瀏覽器 UA（`Mozilla/5.0` 會 403），用 requests 預設 UA；scoreboard 只接受單日 `dates=YYYYMMDD`。
-3. `nba_api` 自訂 `headers=` 會**整個取代**預設標頭（遺失 Referer 等），須與 `NBAStatsHTTP.headers` 合併；不要自行重建 `requests.Session`。
+3. **不要**對 `nba_api` 傳 `headers=` 或覆寫 User-Agent：`headers=` 會整個取代預設標頭，而舊版自訂的 Chrome 120 UA 與套件預設的
+   `Sec-Ch-Ua`（Chrome 145）互相矛盾。一律沿用 `NBAStatsHTTP.headers`，也不要自行重建 `requests.Session`。
+   `nba_api.live` 端點的預設標頭（Chrome 87）已過期，打 `cdn.nba.com` 會 403；CDN 請求改用 stats 預設標頭（去掉 Host），見 `core/sources/nba_cdn.py`。
 4. **Supabase 免費專案閒置會被暫停**：暫停後 pooler 回 `tenant/user not found`、直連主機 DNS 消失，需到 Supabase Dashboard 手動 Restore。
 5. 背景執行 Python 請加 `-u`，否則輸出被緩衝，容易誤判為卡住。
+6. APScheduler：`add_job(..., next_run_time=None)` 是「建立成暫停」，且 `CronTrigger` 不指定 `timezone` 會用機器本地時區。
+   排程現集中在 `core/scheduling.py`（每個 Cron 皆帶 `Asia/Taipei`，有 next-run-time 測試）。
+7. `nbainjuries` 的 timestamp 是**美東當地 naive 時間**（非 UTC），2025-12-22 起為 15 分鐘一份；球員名稱格式為 `Last, First`。
+
+### 資料來源與排程（C.5A 後）
+
+| 資料 | 優先序（失敗自動往下） |
+|---|---|
+| 賽程 / 即時比分 / 逐節 | NBA CDN → stats.nba.com `ScoreboardV3` → ESPN |
+| 基本 box score | NBA CDN `boxscore_<id>` → stats.nba.com `BoxScoreTraditionalV3` |
+| 進階數據（pace/ORtg/DRtg） | 僅 stats.nba.com；失敗不中止，下次補 |
+| 傷病 | `nbainjuries`（官方 PDF） |
+
+每次嘗試與 fallback 狀態寫入 `data_sources`（`nba_cdn` / `nba_api` / `espn` / `nbainjuries`），系統狀態頁可見：被備援取代的來源標 `warn`、勝出的備援註記「備援 <primary>」、全部失敗標 `error`。
+排程（台灣時間）：每日 12:00 賽程/比分、每 5 分鐘依 `game_time_utc` 刷新進行中/待結算賽事（無則不打外部來源）、傷病台灣 00:00–10:59 每 15 分 / 11:00–23:59 每 30 分。
+`python scheduler.py --print-next-runs` 可查看各 job 下次觸發時間。測試：`cd pipeline && pip install -r requirements-dev.txt && pytest`（DB 測試使用暫存 schema，`-m "not db"` 可只跑純邏輯）。
+詳見 [docs/phase-c5a-report.md](docs/phase-c5a-report.md)。
 
 ### Phase C 現況（2026-10）
 

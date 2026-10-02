@@ -1,0 +1,97 @@
+"""
+排程定義（台灣時間）
+------------------------------------------------------------
+把「有哪些 job、什麼時候跑」獨立出來，才能在不啟動排程器、不連資料庫的情況下
+驗證 next-run-time（tests/test_scheduler.py）。
+
+兩個曾經讓排程「看起來有啟動、實際永遠不跑」的坑：
+  1. add_job(..., next_run_time=None) 在 APScheduler 3.x 的語意是「建立成暫停狀態」，
+     job 永遠不會被觸發（只靠啟動時手動跑一次才有資料）。→ 不傳 next_run_time。
+  2. CronTrigger(hour=12) 若沒指定 timezone，傳入 trigger 物件時**不會**套用 scheduler 的
+     timezone，而是用機器本地時區（Docker/Railway 多半是 UTC → 變成台灣 20:00 才跑）。
+     → 每個 CronTrigger 都明確帶 timezone=TPE。
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable
+
+from apscheduler.schedulers.base import BaseScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+
+from .timeutil import TPE, now_utc
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JobSpec:
+    id: str
+    func: Callable
+    trigger: object
+    description: str
+    startup_catchup: bool = True   # run_on_start 時是否額外立即跑一次
+
+
+def guarded(fn: Callable) -> Callable:
+    """job 內任何例外都只記 log，不讓排程器行程中止。"""
+    def wrapper():
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001
+            log.exception("排程工作 %s 失敗", fn.__name__)
+    wrapper.__name__ = fn.__name__
+    return wrapper
+
+
+def job_specs() -> list[JobSpec]:
+    # 延遲 import：純排程時間測試不需要載入資料層
+    from .jobs.daily import fetch_injuries_job, fetch_schedule_and_scores_job, refresh_live_and_final_job
+
+    return [
+        JobSpec("daily_schedule_scores", fetch_schedule_and_scores_job,
+                CronTrigger(hour=12, minute=0, timezone=TPE),
+                "每日 12:00（台灣）：昨日 ET 殘留 + 今日 + 明日賽程/比分/結算"),
+        JobSpec("live_final_refresh", refresh_live_and_final_job,
+                IntervalTrigger(minutes=5, timezone=TPE),
+                "每 5 分鐘：依 game_time_utc 判斷有無進行中/待結算賽事，沒有就不打外部來源"),
+        # 規格書 §5：比賽日每 30 分鐘，美東尖峰時段加密到每 15 分。
+        # 美東 11:00~22:00 ≈ 台灣 00:00~11:00（夏令差 12 小時、冬令差 13 小時，取聯集）。
+        JobSpec("injuries_peak", fetch_injuries_job,
+                CronTrigger(hour="0-10", minute="*/15", timezone=TPE),
+                "台灣 00:00~10:59 每 15 分鐘（美東白天至傍晚，官方報告集中發布）"),
+        JobSpec("injuries_offpeak", fetch_injuries_job,
+                CronTrigger(hour="11-23", minute="0,30", timezone=TPE),
+                "台灣 11:00~23:59 每 30 分鐘", startup_catchup=False),
+    ]
+
+
+def register_jobs(sched: BaseScheduler, *, run_on_start: bool = False) -> list[JobSpec]:
+    """把 job 掛到 scheduler。**不傳 next_run_time**，讓 trigger 自己算下一次；
+    run_on_start=True 時只讓「第一次」立即觸發，之後仍照 trigger 排程。"""
+    specs = job_specs()
+    first_run = datetime.now(TPE) if run_on_start else None
+    for s in specs:
+        kwargs = {"next_run_time": first_run} if first_run and s.startup_catchup else {}
+        sched.add_job(guarded(s.func), s.trigger, id=s.id, name=s.description,
+                      replace_existing=True, **kwargs)
+    return specs
+
+
+def next_run_times(specs: list[JobSpec], now: datetime | None = None) -> dict[str, datetime | None]:
+    """各 job 在 now 之後的下一次觸發時間（tz-aware）。不需啟動排程器。"""
+    now = (now or now_utc()).astimezone(TPE)
+    return {s.id: s.trigger.get_next_fire_time(None, now) for s in specs}
+
+
+def build_scheduler(*, blocking: bool = True, run_on_start: bool = True) -> BaseScheduler:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.schedulers.blocking import BlockingScheduler
+
+    cls = BlockingScheduler if blocking else BackgroundScheduler
+    sched = cls(timezone=TPE, job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 600})
+    register_jobs(sched, run_on_start=run_on_start)
+    return sched
