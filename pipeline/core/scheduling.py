@@ -54,6 +54,7 @@ def job_specs() -> list[JobSpec]:
     from .production.retrain import retrain_job
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
     from .sizing.job import pricing_and_sizing_scheduled
+    from .execution.ledger import paper_strategy_scheduled
     from .config import settings
 
     return [
@@ -99,6 +100,11 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(minute="1-59/5", timezone=TPE),
                 "每 5 分鐘（:01/:06/…，盤口 :03/:33/:40 與預測寫入之後）：最新盤口 × 當時最新有效預測 → "
                 "去水 / 模型機率 / edge / EV（D.2）→ 同一 T 的理論注碼 sizing（D.3；不是推薦）"),
+        # ---- D.4：prospective paper ledger（execution-v1；獨立 job，不讀寫 D.2 / D.3 的表、不寫 bets） ---- #
+        JobSpec("paper_strategy", paper_strategy_scheduled,
+                CronTrigger(minute="2-59/5", timezone=TPE),
+                "每 5 分鐘（:02/:07/…）：已到 T = 開賽 − 60 分、尚未決策的比賽 → 以 T 為 as-of 重建定價 / sizing → "
+                "記錄 decision（含 no_bet）與 paper bets（冪等、不重做；晚 > 15 分 → decision_window_missed）→ 結算已完賽的 paper bets"),
     ]
 
 

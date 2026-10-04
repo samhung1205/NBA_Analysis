@@ -6,7 +6,7 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）、D.3（qualification / Kelly sizing / 風險上限）已實作，D.4 起尚未。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）、D.3（qualification / Kelly sizing / 風險上限）、D.4（策略執行 / 結算 / paper ledger；**目前沒有任何歷史投注績效證據**）已實作，D.5 尚未。
 
 ## 目前完成的功能
 
@@ -162,10 +162,11 @@ npm run db:reset:local     # 重置本機資料庫
 - ✅ **Phase D.1** 盤口擷取與市場正規化：canonical market / 讓分正負號慣例、賽事對應層、快照去重（歷史不覆蓋）、台彩 / The Odds API adapter、排程與來源健康度（見下方「Phase D.1」）
 - ✅ **Phase D.2** 去水 / 模型機率 / edge / EV：單一 Python 定價引擎、push / 三向 / 不明結算處理、時間對齊、`market_pricing_snapshots`（見下方「Phase D.2」）
 - ✅ **Phase D.3** qualification / push-aware Kelly / risk-v1（¼ Kelly、單筆 2%、同場 3%、單日 8%）/ 互斥與新鮮度檢查、`bet_sizing_snapshots`（見下方「Phase D.3」）
+- ✅ **Phase D.4** execution-v1（T-60 as-of 重建、同日依序 exposure）/ settle-v1 結算 / bankroll ledger / yield · bankroll return · drawdown · day-block bootstrap / prospective paper ledger（`paper_strategy_*`，與 `bets` 分離）；正式 DB 無任何歷史盤口 → 歷史投注績效 = 無證據（見下方「Phase D.4」）
 
 ### 尚未實作
 
-- **Phase D.4+** 歷史 ROI backtest、推薦清單（D.5）
+- **Phase D.5** 實際下注 exposure / bankroll sync / 推薦清單
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
 ### 階段一已為階段二預留的接口
@@ -188,7 +189,7 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. 套用 `0006_phase_d3.sql`（`npm run db:migrate:pg`），排程器的 `market_pricing` 才會在定價後寫入理論注碼（0004 / 0005 與 `ODDS_API_KEY` 已完成）
+4. 套用 `0007_phase_d4.sql`（`npm run db:migrate:pg`；0004–0006 與 `ODDS_API_KEY` 已完成），排程器的 `paper_strategy` 才會開始記錄 2026-27 的 T-60 paper decision
 
 ## 待與使用者確認的事項
 
@@ -370,14 +371,37 @@ python run_sizing.py                               # 寫入 bet_sizing_snapshots
 - **risk-v1（凍結，非 ROI 調出）**：full × 0.25 → 單筆 ≤ 2% → 同場（含不同玩法 / bookmaker）合計 ≤ 3% → 同一 betting day（開賽的 Asia/Taipei 日期）合計 ≤ 8%；超過等比例縮放，不排序砍單。`KELLY_FRACTION` 環境變數已移除。
 - **Qualification**：`eligible` / `exposure_scaled` / `no_positive_ev` / `stale_quote` / `mutually_exclusive_positive_kelly` / `unsupported_settlement` / `market_not_open` / `no_prediction` / `invalid_probability` / `unavailable`，附 `reasons[]` / `warnings[]`；`mathematically_eligible` 與 `actionable` 分開，兩者都不是推薦。
 - 資料品質旗標只顯示 warning、不改 stake；同一 snapshot 互斥 outcome 同時正 Kelly → 整個市場拒絕；報價 last_seen 超過 2 × 來源輪詢間隔（台彩 60 分、Odds API 12 小時）→ stale、不 actionable。
-- **Migration**：`migrations/postgres/0006_phase_d3.sql`（**正式 DB 尚未套用**；未套用時 sizing 不寫入、API `sizing.status = unavailable`）。唯一鍵 (定價列, policy, sizing 版本, portfolio_key)：重跑冪等、policy 改版或組合改變產生新列、舊列不改寫。
+- **Migration**：`migrations/postgres/0006_phase_d3.sql`（2026-10-04 已套用到正式 DB；未套用時 sizing 不寫入、API `sizing.status = unavailable`）。唯一鍵 (定價列, policy, sizing 版本, portfolio_key)：重跑冪等、policy 改版或組合改變產生新列、舊列不改寫。
 - **API**：`odds.sizing`、`odds.pricing.markets[].outcomes[].sizing`、`GET /api/sizing?date=`；詳情頁「理論注碼（risk-adjusted stake）」表。
+
+### Phase D.4 — Backtest engine, settlement & prospective performance tracking（2026-10）
+
+策略執行與績效評估層（execution-v1，**在看到任何 ROI 之前凍結**）；**不做**以 ROI 調 risk-v1 / timing / EV 門檻、best-book / consensus、造或回填歷史盤口、自動下注、寫入 bets。詳見 [docs/phase-d4-report.md](docs/phase-d4-report.md)。
+
+```bash
+cd pipeline
+python run_strategy_backtest.py --fixture --summary                                  # 合成 validation slate（validation_only，不是 ROI 證據）
+python run_strategy_backtest.py --source twsport --from 2026-10-20 --to 2026-12-31   # 只用 DB 真實觀測的台彩快照
+python run_strategy_backtest.py --source oddsapi --bookmaker pinnacle --from … --to …  # 國際盤診斷（不是台彩證據）
+python run_paper.py --dry-run          # 到期比賽以 T = 開賽 − 60 分重建、決策（不寫入）
+python run_paper.py --report           # prospective paper performance
+```
+
+- **execution-v1**：T = 開賽 − 60 分 = analysis_as_of（job 晚執行也只用 T 以前資料）；betting day = Asia/Taipei；同日依 T 排序、同 T 為一批；stake = day_start_bankroll × D.3 final × 剩餘 8% 額度縮放；已結算的同日比賽不增加額度；次日以結算後 bankroll 為基準。只執行 D.3 actionable 且 final > 0（EV > 0、無最低 EV 門檻）。
+- **As-of**：直接呼叫 D.2 `price_game_as_of` + D.3 `size_pricings`，不讀 pricing / sizing cache 表；`last_seen_at > T` 時以 T 以前的輪詢紀錄判定新鮮度（不用 T 之後的確認）；artifact 必須 T 以前建立且 sha256 驗證通過。
+- **每場都有 decision**：`bet` 或 `no_bet`（`no_odds` / `stale_odds` / `no_prediction` / `no_positive_ev` / `unsupported_market` / `portfolio_cap` / `decision_window_missed` …），一場一策略一筆、不重做。
+- **settle-v1**：ML（含 OT）/ 讓分 / 大小 / 上半場讓分 / 上半場大小 / 上半場三向（和局是 outcome）；只有 final 才結算；缺比分 / 不一致 / 取消 / 延期 / 改期 → `ungradable`（不猜 void）。
+- **指標**：`yield = net_profit / total_staked`、`bankroll_return = ending / starting − 1`（都不叫 ROI）、max drawdown、log growth、expected vs realized；bootstrap 以 betting day 為單位、≥ 30 天才輸出 CI；subgroup 只作描述。
+- **Evidence**：odds 列分 observed / seed / synthetic / unverified；歷史引擎只用 observed，沒有 → `historical_evidence_available = false`（不輸出 ROI = 0）；Odds API 結果一律 `international_market_diagnostic`。正式 DB 2024-25 / 2025-26：盤口 0 筆 → 無歷史投注證據。
+- **Paper ledger**：`migrations/postgres/0007_phase_d4.sql`（`paper_strategy_days` / `_decisions` / `_bets`；不可變 trigger；**正式 DB 尚未套用**）。排程 `paper_strategy` 每 5 分鐘（:02/:07/…）。
 
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase D.4
+### [下一步] Phase D.5
 
-歷史 ROI backtest：`price_game_as_of` → `sizing.job.size_pricings`（只用 T 以前資料、risk-v1 不得依結果調整）；需先定義決策時點與結算，並等開季後實際累積盤口（以台彩實際賠率計算）。
+實際下注紀錄（`bets`）的 exposure 計入同場 / 單日上限、bankroll sync、介面；paper ledger 與實際下注必須分開。前提：0007 套用、排程器部署、2026-27 prospective ledger 開始累積（台彩快照取得方式仍是瓶頸）。
+
+### [已完成] Phase D.4：策略執行 / 結算 / paper ledger（見上）
 
 ### [已完成] Phase D.3：qualification / Kelly sizing / 風險上限（見上）
 

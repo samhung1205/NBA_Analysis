@@ -10,6 +10,8 @@ Phase A-1：排程器入口（規格書 §5 排程設計，台灣時間）
   - 模型重訓：每週一 16:00（原子寫入新 artifact，失敗不影響現有模型）
 
   - 盤口快照（D.1）：台彩每 30 分鐘（:03/:33）、The Odds API 每日 4 次（00/06/12/18:40，不在啟動時補跑）
+  - 定價 + 理論注碼（D.2 / D.3）：每 5 分鐘（:01/:06/…）
+  - Paper strategy ledger（D.4 execution-v1）：每 5 分鐘（:02/:07/…）記錄 T-60 decision、結算已完賽的 paper bets
 各 job 可單獨執行：python run_predict.py --kind early|final|refresh、python run_retrain.py（--list / --rollback）、
 python run_odds.py --source twsport|oddsapi [--dry-run]。
 啟動時每個 job 會「額外」立即跑一次作為 catch-up，之後完全依 trigger 排程。
