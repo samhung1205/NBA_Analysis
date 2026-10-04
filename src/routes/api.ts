@@ -118,7 +118,30 @@ function shapeOdds(o: any) {
     away_odds: num(o.away_odds),
     over_odds: num(o.over_odds),
     under_odds: num(o.under_odds),
+    // ---- D.1 新增（純新增欄位；舊資料為 null）----
+    bookmaker: o.bookmaker ?? null,
+    market_type: o.market_type ?? null,
+    period: o.period ?? null,
+    outcome_set: o.outcome_set ?? null,
+    away_line: num(o.away_line),
+    draw_odds: num(o.draw_odds),
+    model_target: o.model_target ?? null,
+    model_threshold: num(o.model_threshold),
+    market_status: o.market_status ?? null,
+    source_updated_at: o.source_updated_at ?? null,
+    last_seen_at: o.last_seen_at ?? null,
   }
+}
+
+/**
+ * 同一來源有多家 bookmaker（The Odds API）時，總覽卡片只顯示一家作對照：
+ * 固定偏好順序，其餘依 bookmaker key 字母序 —— 這是「顯示用的決定性選擇」，不是挑最佳盤、不是平均。
+ * 全部 bookmaker 另在 international_books 回傳。
+ */
+const DISPLAY_BOOK_ORDER = ['pinnacle', 'draftkings', 'fanduel', 'betmgm', 'williamhill_us', 'betrivers']
+function bookRank(b: string | null) {
+  const i = DISPLAY_BOOK_ORDER.indexOf(b ?? '')
+  return i === -1 ? DISPLAY_BOOK_ORDER.length : i
 }
 
 /**
@@ -128,7 +151,9 @@ function shapeOdds(o: any) {
 function buildEdgeAnalysis(pred: any, oddsList: any[]) {
   const shaped = oddsList.map(shapeOdds)
   const pick = (source: string, market: string) =>
-    shaped.find((o) => o.source === source && o.market === market) ?? null
+    shaped
+      .filter((o) => o.source === source && o.market === market)
+      .sort((a, b) => bookRank(a.bookmaker) - bookRank(b.bookmaker) || String(a.bookmaker ?? '').localeCompare(String(b.bookmaker ?? '')))[0] ?? null
 
   const tw = {
     ml: pick('twsport', 'ml'),
@@ -144,7 +169,12 @@ function buildEdgeAnalysis(pred: any, oddsList: any[]) {
   }
 
   const modelProb = pred ? num(pred.home_win_prob) : null
-  const analysis: any = { twsport: tw, international: intl, edges: [] as any[] }
+  const analysis: any = {
+    twsport: tw,
+    international: intl,
+    international_books: shaped.filter((o) => o.source === 'oddsapi'),
+    edges: [] as any[],
+  }
 
   // 獨贏 (ML)：edge = 模型機率 − 台彩去抽水後公允機率
   if (tw.ml && modelProb != null) {
@@ -416,9 +446,10 @@ api.get('/odds/:gameId', async (c) => {
   // 依 source+market 分組為時間序列，前端直接餵給 Chart.js
   const series = new Map<string, any>()
   for (const r of rows) {
-    const key = `${r.source}:${r.market}`
+    // D.1：同一來源的不同 bookmaker 是不同時間序列（不可混成一條線）
+    const key = `${r.source}:${r.bookmaker ?? r.source}:${r.market}`
     if (!series.has(key)) {
-      series.set(key, { source: r.source, market: r.market, points: [] as any[] })
+      series.set(key, { source: r.source, bookmaker: r.bookmaker ?? r.source, market: r.market, points: [] as any[] })
     }
     series.get(key)!.points.push({
       t: r.fetched_at,
@@ -427,6 +458,9 @@ api.get('/odds/:gameId', async (c) => {
       away_odds: r.away_odds,
       over_odds: r.over_odds,
       under_odds: r.under_odds,
+      draw_odds: r.draw_odds,
+      market_status: r.market_status,
+      last_seen_at: r.last_seen_at,
     })
   }
   return c.json({ game_id: gameId, snapshots: rows, series: [...series.values()] })
@@ -598,6 +632,7 @@ api.get('/system/status', async (c) => {
       last_error: r.last_error,
       expected_interval_min: expected,
       records_updated: r.records_updated,
+      last_outcome: r.last_outcome ?? null, // D.1：success / partial / no_nba_markets / parser_changed / quota_low …
       age_minutes: ageMin,
       stale,
       // 健康度：排程器回報的狀態優先，其次才用「資料是否過期」推斷

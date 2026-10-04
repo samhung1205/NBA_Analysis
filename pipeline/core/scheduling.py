@@ -52,6 +52,8 @@ def job_specs() -> list[JobSpec]:
     from .jobs.daily import fetch_injuries_job, fetch_schedule_and_scores_job, refresh_live_and_final_job
     from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
     from .production.retrain import retrain_job
+    from .odds.ingest import oddsapi_odds_job, twsport_odds_job
+    from .config import settings
 
     return [
         JobSpec("daily_schedule_scores", fetch_schedule_and_scores_job,
@@ -82,6 +84,14 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(day_of_week="mon", hour=16, minute=0, timezone=TPE),
                 "每週一 16:00（台灣，美東凌晨無比賽）：重訓 → 檢查 → 原子寫入 → promote（失敗不影響現有模型）",
                 startup_catchup=False),
+        # ---- D.1：盤口快照（各來源獨立；失敗只寫心跳，不影響其他 job） ---- #
+        JobSpec("odds_twsport", twsport_odds_job,
+                CronTrigger(minute="3,33", timezone=TPE),
+                "每 30 分鐘（:03 / :33）：台灣運彩 NBA 盤口快照（連續 3 次 blocked → 6 小時退避）"),
+        JobSpec("odds_oddsapi", oddsapi_odds_job,
+                CronTrigger(hour=settings.odds_api_cron_hours, minute=40, timezone=TPE),
+                "每日 4 次（台灣 00/06/12/18:40，ODDS_API_CRON_HOURS 可調）：The Odds API 全場盤（3 credits/次，"
+                "免費方案 500/月；先打不扣額度的 events，無比賽不花額度）", startup_catchup=False),
     ]
 
 

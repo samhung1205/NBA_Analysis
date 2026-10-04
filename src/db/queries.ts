@@ -81,7 +81,13 @@ export async function getLatestPredictionForGame(db: Db, gameId: number) {
   )
 }
 
-/** 每場 / 每來源 / 每玩法的最新盤口（批次） */
+/**
+ * 每場 / 每來源 / 每 bookmaker / 每玩法的最新盤口（批次）
+ * - D.1 起同一來源可有多家 bookmaker（The Odds API）：latest 以 bookmaker 分開取，不混在一起。
+ *   舊資料 bookmaker 為 NULL → 視為來源本身（台彩只有自己一家）。
+ * - 最新一筆若為 suspended / closed，代表「目前沒有可下注的報價」→ 不回傳（不退回較舊的 open 報價）。
+ *   舊資料（market_status 為 NULL）視為 open。歷史仍完整保留在 odds_snapshots（見 getOddsHistory）。
+ */
 export async function getLatestOdds(db: Db, gameIds: number[]) {
   if (!gameIds.length) return new Map<number, any[]>()
   const ph = gameIds.map(() => '?').join(',')
@@ -91,12 +97,14 @@ export async function getLatestOdds(db: Db, gameIds: number[]) {
         AND o.fetched_at = (
           SELECT MAX(o2.fetched_at) FROM odds_snapshots o2
            WHERE o2.game_id = o.game_id AND o2.source = o.source AND o2.market = o.market
+             AND COALESCE(o2.bookmaker, o2.source) = COALESCE(o.bookmaker, o.source)
         )
-      ORDER BY o.source, o.market`,
+      ORDER BY o.source, o.market, o.bookmaker`,
     gameIds
   )
   const map = new Map<number, any[]>()
   for (const r of rows) {
+    if (r.market_status != null && r.market_status !== 'open') continue
     if (!map.has(r.game_id)) map.set(r.game_id, [])
     map.get(r.game_id)!.push(r)
   }
@@ -106,7 +114,7 @@ export async function getLatestOdds(db: Db, gameIds: number[]) {
 /** 單場完整盤口歷史（供折線圖） */
 export async function getOddsHistory(db: Db, gameId: number) {
   return db.all<any>(
-    `SELECT * FROM odds_snapshots WHERE game_id = ? ORDER BY fetched_at ASC`,
+    `SELECT * FROM odds_snapshots WHERE game_id = ? ORDER BY fetched_at ASC, id ASC`,
     [gameId]
   )
 }

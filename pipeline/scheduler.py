@@ -9,8 +9,9 @@ Phase A-1：排程器入口（規格書 §5 排程設計，台灣時間）
   - 預測（C.5D）：每日 12:20 early、每 5 分鐘檢查開賽前 ~60 分鐘 final、每 15 分鐘傷病觸發 refresh
   - 模型重訓：每週一 16:00（原子寫入新 artifact，失敗不影響現有模型）
 
-台彩盤口/國際盤（Phase D）尚未實作。各 job 可單獨執行：python run_predict.py --kind early|final|refresh、
-python run_retrain.py（--list / --rollback）。
+  - 盤口快照（D.1）：台彩每 30 分鐘（:03/:33）、The Odds API 每日 4 次（00/06/12/18:40，不在啟動時補跑）
+各 job 可單獨執行：python run_predict.py --kind early|final|refresh、python run_retrain.py（--list / --rollback）、
+python run_odds.py --source twsport|oddsapi [--dry-run]。
 啟動時每個 job 會「額外」立即跑一次作為 catch-up，之後完全依 trigger 排程。
 """
 from __future__ import annotations

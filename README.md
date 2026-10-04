@@ -6,7 +6,7 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C 已實作，Phase D（盤口）起尚未。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）已實作，D.2（定價 / edge）起尚未。
 
 ## 目前完成的功能
 
@@ -147,7 +147,7 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-10-04
+- **最後更新**：2026-10-04（Phase D.1）
 
 ## 階段二進度
 
@@ -158,9 +158,11 @@ npm run db:reset:local     # 重置本機資料庫
 - ✅ **Phase C.5D** Production inference：C.5C 模型（ml-v2.0）版本化 artifact、每週重訓、未開賽比賽特徵、early / 開賽前 60 分鐘 / 傷病觸發預測排程（見下方「Phase C.5D」）。正式 DB 尚無 2026-27 賽程，開季前一天起由排程產生預測
 - ✅ **Phase C.5E** 預測分佈：分差 / 總分 / 上半場的任意盤口線機率（含 push），以 walk-forward 樣本外殘差擬合（見下方「Phase C.5E」）
 
+- ✅ **Phase D.1** 盤口擷取與市場正規化：canonical market / 讓分正負號慣例、賽事對應層、快照去重（歷史不覆蓋）、台彩 / The Odds API adapter、排程與來源健康度（見下方「Phase D.1」）
+
 ### 尚未實作
 
-- **Phase D** 盤口與價值：台灣運彩 Playwright 爬蟲、The Odds API 整合、Edge/Kelly 精算、ROI 回測
+- **Phase D.2+** 去水 / edge / EV / Kelly、推薦清單、ROI 回測
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
 ### 階段一已為階段二預留的接口
@@ -181,7 +183,7 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. Phase D（盤口與價值分析）
+4. 套用 `0004_phase_d1.sql`、設定 `ODDS_API_KEY`，開始累積盤口快照；之後 Phase D.2（去水 / 定價 / edge）
 
 ## 待與使用者確認的事項
 
@@ -311,9 +313,27 @@ python run_predict.py --kind refresh       # 最後一次預測後有新傷病�
 - production 分佈中心 μ = 0（dist-v2）：**評測後的 production 修正**（預先登記的 μ = OOS 平均每季翻號、造成總分類約 2 個百分點偏差），2026-10-04 起凍結，**2026-27 賽季為前瞻驗證期**；原始結果保留在報告 §5–§9。
 - 獨贏（Phase D）：分差分佈導出的 P(主勝) 對邏輯迴歸勝率非劣（預先固定 δ，報告 §9b）→ 優先使用，邏輯迴歸作一致性監控。
 
+### Phase D.1 — Odds ingestion & market normalization（2026-10）
+
+只做 fetch → parse → normalize → match game → persist snapshots → scheduler / monitoring；**不做**去水 / edge / EV / Kelly / 推薦 / ROI。詳見 [docs/phase-d1-report.md](docs/phase-d1-report.md)。
+
+```bash
+cd pipeline
+python run_odds.py --source all --dry-run            # 抓取 + 解析 + 比對，不寫任何東西
+python run_odds.py --source oddsapi                  # 需 ODDS_API_KEY（免費 500 credits/月；預設每日 4 次 × 3）
+python run_odds.py --source twsport --from-file capture.har   # 台彩：匯入一般瀏覽器匯出的 HAR
+python run_odds.py --print-next-runs
+```
+
+- **Migration**：`migrations/postgres/0004_phase_d1.sql`（**部署 API / 啟用排程前先 `npm run db:migrate:pg`**；未套用時 job 會拒絕寫入）。D1 本機：`npm run db:reset:local` 已含 0002 / 0004。
+- **正負號**（唯一定義：`pipeline/core/odds/canonical.py`）：`line` = 主隊顯示讓分（主讓 5.5 → −5.5），`model_threshold` = +5.5，主隊過盤 ⇔ margin > threshold；客隊 ⇔ margin < threshold。大小 ⇔ total > / < line。
+- **快照**：每個 (game, source, bookmaker, market) 是時間序列；內容沒變只更新 `last_seen_at`，線 / 價 / 狀態變了就新增一列，舊列永不改寫。`v_odds_quotes` 提供每個 outcome 一列的 canonical quote。
+- **台灣運彩**：自動化瀏覽器呼叫其 JSON 被 Cloudflare 擋（403），本專案不繞過 → job 回報 `blocked`；parser 已用一般瀏覽器擷取的真實回應驗證，可走 HAR 匯入。
+- **歷史盤口**：正式 DB 目前 0 筆；嚴格的 historical ROI backtest 只能從實際開始累積快照的那天起算。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase D：盤口與價值分析
+### [下一步] Phase D.2：去水 / 定價 / edge
 
 edge 以 `core/production/probability.py` 計算（分佈 dist-v2、獨贏用分差導出機率）；不再依 2024-25 / 2025-26 調整模型。
 

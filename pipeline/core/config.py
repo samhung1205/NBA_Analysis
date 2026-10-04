@@ -31,6 +31,11 @@ def _env_float(key: str, default: float) -> float:
     return float(v) if v else default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    v = os.environ.get(key)
+    return default if v in (None, "") else v.strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -42,6 +47,16 @@ class Settings:
     alert_webhook_url: str | None = field(default=None)
     model_version: str = field(default="elo-v1.0")
     kelly_fraction: float = field(default=0.25)
+    # ---- Phase D.1 盤口 ---- #
+    twsport_enabled: bool = field(default=True)
+    twsport_headless: bool = field(default=True)
+    twsport_browser_channel: str | None = field(default="chrome")
+    odds_api_regions: str = field(default="us")
+    odds_api_bookmakers: str | None = field(default=None)
+    odds_api_include_h1: bool = field(default=False)
+    odds_api_quota_reserve: int = field(default=25)
+    odds_api_quota_warn: int = field(default=100)
+    odds_api_cron_hours: str = field(default="0,6,12,18")
 
 
 def load_settings() -> Settings:
@@ -61,6 +76,15 @@ def load_settings() -> Settings:
         alert_webhook_url=_env("ALERT_WEBHOOK_URL") or None,
         model_version=_env("MODEL_VERSION") or "elo-v1.0",
         kelly_fraction=_env_float("KELLY_FRACTION", 0.25),
+        twsport_enabled=_env_bool("TWSPORT_ENABLED", True),
+        twsport_headless=_env_bool("TWSPORT_HEADLESS", True),
+        twsport_browser_channel=(_env("TWSPORT_BROWSER_CHANNEL", "chrome") or None),
+        odds_api_regions=_env("ODDS_API_REGIONS") or "us",
+        odds_api_bookmakers=_env("ODDS_API_BOOKMAKERS") or None,
+        odds_api_include_h1=_env_bool("ODDS_API_INCLUDE_H1", False),
+        odds_api_quota_reserve=int(_env_float("ODDS_API_QUOTA_RESERVE", 25)),
+        odds_api_quota_warn=int(_env_float("ODDS_API_QUOTA_WARN", 100)),
+        odds_api_cron_hours=_env("ODDS_API_CRON_HOURS") or "0,6,12,18",
     )
 
 
