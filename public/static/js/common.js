@@ -78,6 +78,13 @@ const NBA = {
   },
 
   /* --------------------------- UI 元件 --------------------------- */
+  /** edge_vs_fair → 顯示等級（純呈現；與 src/lib/pricing.ts edgeTier 相同門檻） */
+  edgeTierOf(edge) {
+    if (edge == null || edge <= 0.01) return 'none';
+    if (edge < 0.03) return 'low';
+    if (edge < 0.06) return 'mid';
+    return 'high';
+  },
   edgeBadge(tier, label) {
     const cls = { high: 'edge-high', mid: 'edge-mid', low: 'edge-low' }[tier] || 'edge-none';
     const icon = tier === 'high' ? 'fa-fire' : tier === 'mid' ? 'fa-arrow-trend-up' : tier === 'low' ? 'fa-circle-dot' : 'fa-minus';

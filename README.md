@@ -6,7 +6,7 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）已實作，D.2（定價 / edge）起尚未。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）已實作，D.3 起尚未。
 
 ## 目前完成的功能
 
@@ -14,7 +14,7 @@
 | 頁面 | 路徑 | 內容 |
 |---|---|---|
 | 賽事總覽 | `/` | 每場卡片：對戰、台灣時間、模型勝率、預測分差/總分、上半場預測、台彩 vs 國際盤 vs 模型、Edge 標示；可切換 今日/明日/後天 或任選日期 |
-| 單場詳情 | `/games/:id` | 盤口價值分析（含去抽水公允機率、¼Kelly）、逐節/半場表格、**特徵拆解（為什麼這樣預測）**、盤口變動折線圖、本場傷病、球隊數據、雙方近況、H2H |
+| 單場詳情 | `/games/:id` | 盤口定價（每個 bookmaker / outcome：原始隱含、去水公允、模型、push、edge、EV；D.2）、逐節/半場表格、**特徵拆解（為什麼這樣預測）**、盤口變動折線圖、本場傷病、球隊數據、雙方近況、H2H |
 | 傷病中心 | `/injuries` | 依球隊分組的官方傷病申報 + **主力缺陣警示**（警示球隊排序在前）；可切換今日/明日 |
 | 回測 / 績效 | `/performance` | 模型歷史準確率、ATS、大小分、上半場命中率、Log Loss/Brier、模擬 ROI；個人實際投注損益曲線 |
 | 投注紀錄 | `/bets` | 個人下單 CRUD、手動結算、命中率/損益/ROI 統計 |
@@ -42,14 +42,14 @@
 
 ### 驗收測試
 ```bash
-npm run test:api        # 90 項檢查，需服務已啟動
+npm run test:api        # 96 項檢查，需服務已啟動
 ```
 > ⚠️ 這組檢查依賴 **seed 測試資料**（明日 3 場、今日進行中等）。正式 Supabase 已回填真實賽事、seed 賽事已清除，
 > 對它執行會有「games=0」類失敗，屬預期。請對本機 D1 seed 執行（`npm run db:reset:local`，並暫時不要讓 `.dev.vars`
 > 的 `DATABASE_URL` 生效，例如啟動時改用 `--binding SESSION_SECRET=...`）。
-涵蓋：6 個頁面渲染、全部 API 契約、edge/Kelly 計算、抽水 > 0、授權保護（401）、
+涵蓋：6 個頁面渲染、全部 API 契約、D.2 定價讀取（去水總和 = 1、edge = 模型 − 公允、bookmaker 分開）、抽水 > 0、授權保護（401）、
 bets 寫入→讀回→結算→刪除、ROI 以台彩實際賠率計算、404/400 錯誤處理。
-**目前結果：90 通過 / 0 失敗。**
+**目前結果：96 通過 / 0 失敗**（D.2：原 90 項 + 6 項定價檢查）。
 
 ## 資料架構
 
@@ -147,7 +147,7 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-10-04（Phase D.1）
+- **最後更新**：2026-10-04（Phase D.2）
 
 ## 階段二進度
 
@@ -159,10 +159,11 @@ npm run db:reset:local     # 重置本機資料庫
 - ✅ **Phase C.5E** 預測分佈：分差 / 總分 / 上半場的任意盤口線機率（含 push），以 walk-forward 樣本外殘差擬合（見下方「Phase C.5E」）
 
 - ✅ **Phase D.1** 盤口擷取與市場正規化：canonical market / 讓分正負號慣例、賽事對應層、快照去重（歷史不覆蓋）、台彩 / The Odds API adapter、排程與來源健康度（見下方「Phase D.1」）
+- ✅ **Phase D.2** 去水 / 模型機率 / edge / EV：單一 Python 定價引擎、push / 三向 / 不明結算處理、時間對齊、`market_pricing_snapshots`（見下方「Phase D.2」）
 
 ### 尚未實作
 
-- **Phase D.2+** 去水 / edge / EV / Kelly、推薦清單、ROI 回測
+- **Phase D.3+** 排序 / 篩選、Kelly、推薦清單、ROI 回測
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
 ### 階段一已為階段二預留的接口
@@ -171,7 +172,8 @@ npm run db:reset:local     # 重置本機資料庫
 |---|---|
 | `games`（含逐節/半場欄位） | 賽事總覽、詳情頁逐節表 |
 | `predictions`（含 `features_json.contributions`） | 總覽卡片、詳情頁特徵拆解 |
-| `odds_snapshots`（`source='twsport'` / `'oddsapi'`） | 盤口比較表、Edge 標示、變動折線圖 |
+| `odds_snapshots`（`source='twsport'` / `'oddsapi'`） | 盤口比較表、變動折線圖 |
+| `market_pricing_snapshots`（D.2 定價 job 寫入） | 詳情頁盤口定價表、總覽 Edge 標示 |
 | `injuries`（最新狀態；球員從報告消失 → 補 `Available`） | 傷病中心、主力缺陣警示、詳情頁 |
 | `data_sources` | 系統狀態頁（含 warn/error 告警） |
 | `model_metrics` | 回測績效頁 |
@@ -183,13 +185,12 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. 套用 `0004_phase_d1.sql`、設定 `ODDS_API_KEY`，開始累積盤口快照；之後 Phase D.2（去水 / 定價 / edge）
+4. 套用 `0005_phase_d2.sql`（`npm run db:migrate:pg`），排程器的 `market_pricing` 才會寫入定價（0004 與 `ODDS_API_KEY` 已完成）
 
 ## 待與使用者確認的事項
 
-1. **Edge 精算範圍**：目前讓分/大小分的 edge 以「模型值 vs 盤口線的落差」呈現（`line_gap`），
-   標記為 `note: 'edge 需階段二模型輸出分佈後精算'`。真正的機率型 edge 需階段二模型輸出
-   分差/總分的**機率分佈**（而非單點預測）才能計算 —— 屬 Phase C/D 範圍。獨贏(ML)的 edge 已為真實機率計算。
+1. ~~**Edge 精算範圍**~~：D.2 已完成——所有市場的 edge 都改為機率型（`edge_vs_fair = 模型 − 去水公允`），線差（`line_gap`）不再稱為 edge；
+   ¼Kelly 暫停（`kelly_quarter = null`，D.3+ 再決定）。見 [docs/phase-d2-report.md](docs/phase-d2-report.md)。
 2. **球隊中文名**：目前 seed 用常見譯名，若你有偏好的譯名（如「塞爾提克」vs「凱爾特人」）可調整
 3. **正式部署與 Hyperdrive**：目前修正（每請求獨立連線）已驗證穩定可用；若之後要正式對外開放給多人使用，
    建議評估改用 Cloudflare Hyperdrive 以消除連線延遲，見上方「連線模式踩坑記錄」
@@ -331,11 +332,32 @@ python run_odds.py --print-next-runs
 - **台灣運彩**：自動化瀏覽器呼叫其 JSON 被 Cloudflare 擋（403），本專案不繞過 → job 回報 `blocked`；parser 已用一般瀏覽器擷取的真實回應驗證，可走 HAR 匯入。
 - **歷史盤口**：正式 DB 目前 0 筆；嚴格的 historical ROI backtest 只能從實際開始累積快照的那天起算。
 
+### Phase D.2 — No-vig market pricing, model edge & EV（2026-10）
+
+只做定價：raw implied → overround → 去水公允 → 模型機率 → edge → EV；**不做** Kelly / 下注金額 / 推薦 / best-book / consensus / ROI。詳見 [docs/phase-d2-report.md](docs/phase-d2-report.md)。
+
+```bash
+cd pipeline
+python run_pricing.py --dry-run                                   # 未來 48 小時：最新盤口 × 當時最新有效預測（不寫入）
+python run_pricing.py                                             # 寫入 market_pricing_snapshots（冪等）
+python run_pricing.py --game-id 123 --as-of 2026-10-21T22:00:00Z  # 歷史重建：只用該時點以前的盤口 / 預測 / artifact
+```
+
+- **唯一實作**：`pipeline/core/pricing/`（`novig` → `engine.price_market` → `alignment` → `job`）。Node API 只讀 `market_pricing_snapshots`；`src/lib/edge.ts`（TS 去水 / Kelly / line_gap）已刪除。
+- **定義（凍結）**：`raw_implied_prob = 1/odds`、`market_overround = Σraw − 1`、`fair_no_vig_prob = raw/Σraw`（`proportional-v1`，兩向 / 三向全部 outcome 一起）、`model_prob` = C.5E P(win)、`edge_vs_fair = model − fair`、`ev_per_unit = P(win)·(odds−1) − P(loss)`（實際賠率；整數線 push 退本金）。
+- **模型機率**一律經 `probability.line_probability_from_prediction_row()`（prediction 列記錄的 artifact 版本）；全場獨贏 = P(margin > 0)，邏輯迴歸勝率只作 > 5 pp 一致性警示。
+- **台彩上半場三向**：主 / 和 / 客一起去水，和局是 outcome（不是 push）；**兩向上半場獨贏**結算不明 → 只算 raw / 去水，不算 edge / EV；四分之一線不支援。
+- **時間對齊**：snapshot `fetched_at ≤ T`、預測 `max(created_at, prediction_as_of) ≤ T` 的最新有效一筆；違反即拒絕。
+- **Migration**：`migrations/postgres/0005_phase_d2.sql`（**正式 DB 尚未套用**；未套用時 job 不定價、API `pricing.status = unavailable`）。排程 `market_pricing` 每 5 分鐘。
+- **API**：新增 `odds.pricing`（每 bookmaker × 市場 × outcome）；`odds.edges[]` 保留形狀但 deprecated、只由 pricing 導出，`kelly_quarter` / `line_gap` 為 null。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase D.2：去水 / 定價 / edge
+### [下一步] Phase D.3
 
-edge 以 `core/production/probability.py` 計算（分佈 dist-v2、獨贏用分差導出機率）；不再依 2024-25 / 2025-26 調整模型。
+讀 `market_pricing_snapshots` 設計排序 / 篩選（Kelly 與推薦屬後續階段）；真實資料驗證需先套用 0005 並累積開季後盤口。
+
+### [已完成] Phase D.2：去水 / 定價 / edge / EV（見上）
 
 ### [已完成] Phase C.5E：預測分佈（見上）
 

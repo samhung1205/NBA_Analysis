@@ -42,6 +42,11 @@
 
     const sideLabel = (sel) =>
       sel === 'home' ? homeName : sel === 'away' ? awayName : sel === 'over' ? '大分' : '小分';
+    // D.2：edge = 模型 − 去水公允機率（Python 定價結果）；讓分 / 大小分不再顯示線差
+    const edgeText = (e) => `${sideLabel(e.selection)} ${NBA.signed((e.edge ?? 0) * 100, 1)}%`;
+    // 獨贏模型機率：分差分佈導出（與定價一致）；尚未定價時退回邏輯迴歸勝率
+    const twMl = (g.odds?.pricing?.markets || []).find((m) => m.source === 'twsport' && m.market === 'ml' && m.status === 'priced');
+    const mlHome = twMl ? twMl.outcomes.find((o) => o.side === 'home')?.model_prob : null;
 
     // 盤口比較列
     const rows = [];
@@ -51,8 +56,8 @@
         '不讓分',
         tw.ml ? `${g.away.abbr} ${NBA.odds(tw.ml.away_odds)} / ${g.home.abbr} ${NBA.odds(tw.ml.home_odds)}` : '<span class="text-slate-600">無盤口</span>',
         intl.ml ? `${NBA.odds(intl.ml.away_odds)} / ${NBA.odds(intl.ml.home_odds)}` : '—',
-        hwp != null ? `主 ${NBA.pct(hwp)}` : '—',
-        mlEdge ? NBA.edgeBadge(mlEdge.tier, `${sideLabel(mlEdge.selection)} ${NBA.signed((mlEdge.edge ?? 0) * 100, 1)}%`) : ''
+        mlHome != null ? `主 ${NBA.pct(mlHome)}` : hwp != null ? `主 ${NBA.pct(hwp)}` : '—',
+        mlEdge ? NBA.edgeBadge(mlEdge.tier, edgeText(mlEdge)) : ''
       )
     );
     const spEdge = edgeBy('spread');
@@ -62,7 +67,7 @@
         tw.spread ? `${NBA.signed(tw.spread.line)} @ ${NBA.odds(tw.spread.home_odds)}` : '<span class="text-slate-600">無盤口</span>',
         intl.spread ? `${NBA.signed(intl.spread.line)}` : '—',
         p?.pred_margin != null ? `主隊 ${NBA.signed(p.pred_margin)}` : '—',
-        spEdge ? NBA.edgeBadge(spEdge.tier, `${sideLabel(spEdge.selection)} 差 ${NBA.signed(spEdge.line_gap)}`) : ''
+        spEdge ? NBA.edgeBadge(spEdge.tier, edgeText(spEdge)) : ''
       )
     );
     const toEdge = edgeBy('total');
@@ -72,7 +77,7 @@
         tw.total ? `${NBA.fixed(tw.total.line)} (大 ${NBA.odds(tw.total.over_odds)}/小 ${NBA.odds(tw.total.under_odds)})` : '<span class="text-slate-600">無盤口</span>',
         intl.total ? NBA.fixed(intl.total.line) : '—',
         p?.pred_total != null ? NBA.fixed(p.pred_total) : '—',
-        toEdge ? NBA.edgeBadge(toEdge.tier, `${sideLabel(toEdge.selection)} 差 ${NBA.signed(toEdge.line_gap)}`) : ''
+        toEdge ? NBA.edgeBadge(toEdge.tier, edgeText(toEdge)) : ''
       )
     );
     const h1sEdge = edgeBy('h1_spread');
@@ -83,7 +88,7 @@
           tw.h1_spread ? `${NBA.signed(tw.h1_spread.line)} @ ${NBA.odds(tw.h1_spread.home_odds)}` : '<span class="text-slate-600">無盤口</span>',
           '—',
           p?.half1?.margin != null ? `主隊 ${NBA.signed(p.half1.margin)}` : '—',
-          h1sEdge ? NBA.edgeBadge(h1sEdge.tier, `${sideLabel(h1sEdge.selection)} 差 ${NBA.signed(h1sEdge.line_gap)}`) : ''
+          h1sEdge ? NBA.edgeBadge(h1sEdge.tier, edgeText(h1sEdge)) : ''
         )
       );
     }
@@ -95,7 +100,7 @@
           tw.h1_total ? `${NBA.fixed(tw.h1_total.line)} (大 ${NBA.odds(tw.h1_total.over_odds)}/小 ${NBA.odds(tw.h1_total.under_odds)})` : '<span class="text-slate-600">無盤口</span>',
           '—',
           p?.half1?.total != null ? NBA.fixed(p.half1.total) : '—',
-          h1tEdge ? NBA.edgeBadge(h1tEdge.tier, `${sideLabel(h1tEdge.selection)} 差 ${NBA.signed(h1tEdge.line_gap)}`) : ''
+          h1tEdge ? NBA.edgeBadge(h1tEdge.tier, edgeText(h1tEdge)) : ''
         )
       );
     }

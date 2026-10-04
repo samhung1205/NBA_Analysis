@@ -33,3 +33,16 @@ def test_guarded_job_failure_does_not_propagate():
     def boom():
         raise RuntimeError("odds source exploded")
     assert guarded(boom)() is None
+
+
+def test_market_pricing_every_5_minutes_after_odds_and_predictions():
+    """D.2：每 5 分鐘（:01/:06/…）——台彩 :03/:33、Odds API :40 之後幾分鐘內就會定價。"""
+    s = spec("market_pricing")
+    t = datetime(2026, 10, 20, 9, 3, tzinfo=TPE)
+    fires = []
+    for _ in range(3):
+        t = s.trigger.get_next_fire_time(None, t + timedelta(seconds=1))
+        fires.append(t.minute)
+    assert fires == [6, 11, 16] and t.utcoffset() == timedelta(hours=8)
+    nxt = s.trigger.get_next_fire_time(None, datetime(2026, 10, 20, 12, 40, 30, tzinfo=TPE))
+    assert (nxt.hour, nxt.minute) == (12, 41)

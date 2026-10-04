@@ -76,9 +76,28 @@ ok('  賽事含台彩盤口', !!g0?.odds?.twsport?.ml && !!g0?.odds?.twsport?.sp
 ok('  賽事含國際盤對照', !!g0?.odds?.international?.ml)
 ok('  賽事含 edge 分析', Array.isArray(g0?.odds?.edges) && g0.odds.edges.length > 0)
 const mlEdge = g0?.odds?.edges?.find((e) => e.market === 'ml')
-ok('  ML edge 含模型機率/市場公允機率/抽水/Kelly',
-  mlEdge?.model_prob != null && mlEdge?.market_fair_prob != null && mlEdge?.vig != null && mlEdge?.kelly_quarter != null)
+ok('  ML edge 含模型機率/市場公允機率/抽水（D.2：Kelly 已停用為 null）',
+  mlEdge?.model_prob != null && mlEdge?.market_fair_prob != null && mlEdge?.vig != null && mlEdge?.kelly_quarter === null)
 ok('  台彩抽水 > 0（返還率低於 100%）', (mlEdge?.vig ?? 0) > 0, `vig=${mlEdge?.vig}`)
+
+// D.2：定價（Python pricing engine 寫入；API 只讀）
+const pr = g0?.odds?.pricing
+ok('  odds.pricing 存在且已定價（pricing-v1 / proportional-v1）',
+  pr?.pricing_version === 'pricing-v1' && pr?.no_vig_method === 'proportional-v1' && pr?.status === 'priced' && pr.markets.length > 0,
+  `status=${pr?.status}`)
+const twMl = pr?.markets?.find((m) => m.source === 'twsport' && m.market === 'ml')
+const fields = ['decimal_odds', 'raw_implied_prob', 'fair_no_vig_prob', 'model_prob', 'push_prob', 'edge_vs_fair', 'ev_per_unit']
+ok('  每個 outcome 同時有 賠率/原始隱含/去水公允/模型/push/edge/EV',
+  !!twMl && twMl.outcomes.length === 2 && twMl.outcomes.every((o) => fields.every((f) => o[f] != null)))
+ok('  去水公允機率總和 = 1、抽水 = Σ原始隱含 − 1',
+  !!twMl && Math.abs(twMl.outcomes.reduce((a, o) => a + o.fair_no_vig_prob, 0) - 1) < 1e-9 &&
+  Math.abs(twMl.market_overround - (twMl.outcomes.reduce((a, o) => a + o.raw_implied_prob, 0) - 1)) < 1e-9)
+ok('  edge_vs_fair = 模型 − 去水公允（與 EV 不同欄位）',
+  !!twMl && twMl.outcomes.every((o) => Math.abs(o.edge_vs_fair - (o.model_prob - o.fair_no_vig_prob)) < 1e-9 && o.edge_vs_fair !== o.ev_per_unit))
+ok('  國際盤各 bookmaker 獨立定價（不平均）',
+  pr?.markets?.some((m) => m.source === 'oddsapi') && pr.markets.every((m) => m.outcomes.length >= 2))
+const spEdge = g0?.odds?.edges?.find((e) => e.market === 'spread')
+ok('  讓分 edge 以機率計算（不再用 line_gap）', spEdge?.edge != null && spEdge?.line_gap === null && spEdge?.deprecated === true)
 
 // today / 任意日期
 const today = await req('/api/games/today')

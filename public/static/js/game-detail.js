@@ -150,41 +150,68 @@
     </section>`;
   }
 
-  /** 盤口比較 + edge */
+  /**
+   * 盤口定價（D.2）：每個來源 / bookmaker / 市場 / outcome 一列。
+   * 數字全部來自 Python pricing engine（odds.pricing），這裡不計算任何機率。
+   * 市場機率（原始隱含 / 去水公允）與模型機率分欄顯示，不混用；不顯示 Kelly / 下注建議。
+   */
   function oddsSection(d) {
-    const edges = d.odds?.edges || [];
-    if (!edges.length) {
-      return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-        <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-scale-balanced mr-1.5 text-slate-500"></i>盤口與價值分析</h2>
-        <p class="text-sm text-slate-500">尚無盤口資料（階段二台彩爬蟲上線後自動顯示）。</p>
-      </section>`;
+    const pr = d.odds?.pricing;
+    const markets = pr?.markets || [];
+    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-scale-balanced mr-1.5 text-slate-500"></i>盤口定價（去水 / 模型 / Edge / EV）</h2>`;
+    if (!markets.length) {
+      const msg = pr?.status === 'unavailable'
+        ? '定價資料表尚未建立（migration 0005）。'
+        : pr?.status === 'not_priced' ? '已有盤口，尚待定價工作計算（每 5 分鐘）。' : '尚無盤口資料。';
+      return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">${head}
+        <p class="text-sm text-slate-500">${msg}</p></section>`;
     }
     const g = d.game;
-    const sideLabel = (sel) =>
-      sel === 'home' ? NBA.teamName(g.home) : sel === 'away' ? NBA.teamName(g.away) : sel === 'over' ? '大分' : '小分';
-    const rows = edges
-      .map(
-        (e) => `<tr>
-        <td class="text-xs text-slate-300">${NBA.esc(e.market_label || e.market)}</td>
-        <td class="text-xs">${NBA.esc(sideLabel(e.selection))}</td>
-        <td class="text-xs num">${e.line != null ? NBA.signed(e.line) : '—'}</td>
-        <td class="text-xs num">${NBA.odds(e.odds)}</td>
-        <td class="text-xs num">${e.model_prob != null ? NBA.pct(e.model_prob) : e.model_value != null ? NBA.fixed(e.model_value) : '—'}</td>
-        <td class="text-xs num text-slate-400">${e.market_fair_prob != null ? NBA.pct(e.market_fair_prob) : '—'}</td>
-        <td class="text-xs num text-slate-500">${e.vig != null ? NBA.pct(e.vig) : '—'}</td>
-        <td class="text-right">${NBA.edgeBadge(e.tier, e.edge != null ? NBA.signed(e.edge * 100, 1) + '%' : e.line_gap != null ? '差 ' + NBA.signed(e.line_gap) : '—')}</td>
-        <td class="text-xs num text-right ${e.kelly_quarter ? 'text-orange-300' : 'text-slate-600'}">${e.kelly_quarter != null ? NBA.pct(e.kelly_quarter) : '—'}</td>
-      </tr>`
-      )
+    const sideLabel = (s) =>
+      ({ home: NBA.teamName(g.home), away: NBA.teamName(g.away), draw: '和局', over: '大分', under: '小分' })[s] || s;
+    const bookLabel = (m) => (m.source === 'twsport' ? '台彩' : m.bookmaker);
+    const statusText = {
+      market_only: '尚無有效預測（只有市場機率）',
+      unsupported_settlement: '平手結算規則不明 → 不計算 EV',
+      unsupported_market: '模型不支援此市場',
+      rejected: '市場不完整 / 資料異常',
+    };
+    const pct = (v, dp = 1) => (v != null ? NBA.pct(v, dp) : '—');
+    const rows = markets
+      .map((m) => {
+        const note = m.status !== 'priced'
+          ? `<div class="text-[10px] text-amber-400/80">${NBA.esc(statusText[m.status] || m.status)}</div>`
+          : (m.warnings || []).length ? `<div class="text-[10px] text-amber-400/80">${NBA.esc(m.warnings.join(', '))}</div>` : '';
+        return m.outcomes
+          .map((o, i) => `<tr class="${i === 0 ? 'border-t border-slate-800' : ''}">
+          <td class="text-xs text-slate-400">${i === 0 ? NBA.esc(bookLabel(m)) : ''}</td>
+          <td class="text-xs text-slate-300">${i === 0 ? NBA.esc(m.market_label || m.market) + note : ''}</td>
+          <td class="text-xs">${NBA.esc(sideLabel(o.side))}</td>
+          <td class="text-xs num">${o.display_line != null ? (m.market_type === 'total' ? NBA.fixed(o.display_line) : NBA.signed(o.display_line)) : '—'}</td>
+          <td class="text-xs num">${NBA.odds(o.decimal_odds)}</td>
+          <td class="text-xs num text-slate-500">${pct(o.raw_implied_prob)}</td>
+          <td class="text-xs num text-slate-400">${pct(o.fair_no_vig_prob)}</td>
+          <td class="text-xs num text-orange-300">${pct(o.model_prob)}</td>
+          <td class="text-xs num text-slate-500">${o.push_prob ? pct(o.push_prob) : o.model_prob != null ? '0' : '—'}</td>
+          <td class="text-right">${o.edge_vs_fair != null ? NBA.edgeBadge(NBA.edgeTierOf(o.edge_vs_fair), NBA.signed(o.edge_vs_fair * 100, 1) + '%') : '—'}</td>
+          <td class="text-xs num text-right ${o.ev_per_unit > 0 ? 'text-green-400' : 'text-slate-400'}">${o.ev_per_unit != null ? NBA.signed(o.ev_per_unit * 100, 1) + '%' : '—'}</td>
+          <td class="text-xs num text-right text-slate-500">${i === 0 ? pct(m.market_overround) : ''}</td>
+        </tr>`)
+          .join('');
+      })
       .join('');
 
     return `
     <section id="odds-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-scale-balanced mr-1.5 text-slate-500"></i>盤口與價值分析（台彩實際賠率）</h2>
-      <p class="text-[11px] text-slate-500 mb-3">公允機率已去除台彩抽水；Kelly 為 1/4 Kelly 建議資金比例上限。</p>
+      ${head}
+      <p class="text-[11px] text-slate-500 mb-3">
+        原始隱含 = 1/賠率（含水）；去水公允 = 同一盤口全部選項一起比例去水（${NBA.esc(pr.no_vig_method)}）；
+        模型 = C.5E 分佈的 P(勝)；Push = 整數線退款機率；Edge = 模型 − 去水公允；EV = 以實際賠率每投注 1 單位的期望值。
+        各 bookmaker 分開計算，不平均、不挑最佳盤；本表不是投注建議。
+      </p>
       <div class="overflow-x-auto">
         <table class="stat-table text-sm">
-          <thead><tr><th>玩法</th><th>建議方向</th><th>盤線</th><th>賠率</th><th>模型</th><th>市場公允</th><th>抽水</th><th class="text-right">Edge</th><th class="text-right">¼Kelly</th></tr></thead>
+          <thead><tr><th>來源</th><th>玩法</th><th>選項</th><th>盤線</th><th>賠率</th><th>原始隱含</th><th>去水公允</th><th>模型</th><th>Push</th><th class="text-right">Edge</th><th class="text-right">EV</th><th class="text-right">抽水</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>

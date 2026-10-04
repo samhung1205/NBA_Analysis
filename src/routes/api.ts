@@ -14,7 +14,7 @@ import {
   tomorrowTpe,
   formatTpe,
 } from '../lib/time'
-import { devig, calcEdge, kellyFraction, edgeTier, impliedProb } from '../lib/edge'
+import { PRICING_VERSION, legacyEdges, shapePricing } from '../lib/pricing'
 import { getCurrentUser } from '../lib/auth'
 
 type Env = { Bindings: AppBindings }
@@ -81,6 +81,7 @@ function shapeGame(row: any) {
 function shapePrediction(p: any) {
   if (!p) return null
   return {
+    id: p.id ?? null, // D.2 新增：對照 odds.pricing.markets[].prediction_id
     model_version: p.model_version,
     created_at: p.created_at,
     home_win_prob: num(p.home_win_prob),
@@ -145,10 +146,11 @@ function bookRank(b: string | null) {
 }
 
 /**
- * 綜合模型預測與盤口，計算 edge。
- * 台彩(twsport)優先作為下注標的；國際盤(oddsapi)僅作對照。
+ * 綜合模型預測與盤口。
+ * D.2：去水 / 模型機率 / edge / EV 一律由 Python pricing engine 計算並寫入 market_pricing_snapshots，
+ * 這裡只讀取與分組（不在 TS 重算任何機率）。台彩(twsport)與每家國際 bookmaker 各自獨立定價，不平均、不挑最佳。
  */
-function buildEdgeAnalysis(pred: any, oddsList: any[]) {
+function buildEdgeAnalysis(pred: any, oddsList: any[], pricingRows: any[] | null) {
   const shaped = oddsList.map(shapeOdds)
   const pick = (source: string, market: string) =>
     shaped
@@ -168,114 +170,36 @@ function buildEdgeAnalysis(pred: any, oddsList: any[]) {
     total: pick('oddsapi', 'total'),
   }
 
-  const modelProb = pred ? num(pred.home_win_prob) : null
-  const analysis: any = {
+  const pricing = shapePricing(
+    pricingRows,
+    shaped.map((o) => Number(o.id)),
+    pred?.id != null ? Number(pred.id) : null
+  )
+  return {
     twsport: tw,
     international: intl,
     international_books: shaped.filter((o) => o.source === 'oddsapi'),
-    edges: [] as any[],
+    // D.2 正式欄位：每個 bookmaker × 市場 × outcome 的 raw implied / 去水 / 模型 / push / edge / EV
+    pricing,
+    // deprecated：階段一形狀，僅由 pricing 導出（台彩、已定價市場）；kelly_quarter / line_gap 為 null
+    edges: legacyEdges(pricing),
+    edges_deprecated: 'edges[] 已停用新功能：請改讀 odds.pricing.markets（edge = edge_vs_fair = model_prob − fair_no_vig_prob）。'
+      + 'D.2 不做 Kelly / 下注金額 / 推薦；讓分與大小分不再以線差（line_gap）當 edge。',
   }
+}
 
-  // 獨贏 (ML)：edge = 模型機率 − 台彩去抽水後公允機率
-  if (tw.ml && modelProb != null) {
-    const fair = devig(tw.ml.home_odds, tw.ml.away_odds)
-    const homeEdge = calcEdge(modelProb, fair.home)
-    const awayEdge = calcEdge(1 - modelProb, fair.away)
-    const best =
-      (homeEdge ?? -1) >= (awayEdge ?? -1)
-        ? { side: 'home', edge: homeEdge, odds: tw.ml.home_odds, prob: modelProb }
-        : { side: 'away', edge: awayEdge, odds: tw.ml.away_odds, prob: 1 - modelProb }
-    analysis.edges.push({
-      market: 'ml',
-      market_label: '不讓分(獨贏)',
-      selection: best.side,
-      line: null,
-      odds: best.odds,
-      model_prob: best.prob,
-      market_fair_prob: best.side === 'home' ? fair.home : fair.away,
-      market_implied_prob: impliedProb(best.odds ?? 0),
-      vig: fair.vig,
-      edge: best.edge,
-      tier: edgeTier(best.edge),
-      kelly_quarter: kellyFraction(best.prob, best.odds, 0.25),
-    })
+/** 一批最新盤口 → 定價列（按 game 分組） */
+async function pricingByGame(db: any, oddsMap: Map<number, any[]>) {
+  const ids = [...oddsMap.values()].flat().map((o) => Number(o.id))
+  const rows = await q.getPricingForSnapshots(db, ids, PRICING_VERSION)
+  if (rows == null) return null
+  const byGame = new Map<number, any[]>()
+  for (const r of rows) {
+    const g = Number(r.game_id)
+    if (!byGame.has(g)) byGame.set(g, [])
+    byGame.get(g)!.push(r)
   }
-
-  // 讓分：以模型預測分差 vs 盤中線判斷方向（機率換算留待階段二模型輸出分佈後精算）
-  if (tw.spread && pred && num(pred.pred_margin) != null) {
-    const line = tw.spread.line ?? 0 // 慣例：主隊讓分為負值
-    const predMargin = num(pred.pred_margin)!
-    const diff = predMargin + line // >0 表示模型認為主隊可打贏此讓分盤
-    analysis.edges.push({
-      market: 'spread',
-      market_label: '讓分',
-      selection: diff > 0 ? 'home' : 'away',
-      line,
-      odds: diff > 0 ? tw.spread.home_odds : tw.spread.away_odds,
-      model_value: Number(predMargin.toFixed(2)),
-      line_gap: Number(diff.toFixed(2)), // 模型與盤口的分差落差
-      edge: null,
-      tier: Math.abs(diff) >= 3 ? 'mid' : Math.abs(diff) >= 1.5 ? 'low' : 'none',
-      note: 'edge 需階段二模型輸出分差分佈後精算',
-    })
-  }
-
-  // 大小分
-  if (tw.total && pred && num(pred.pred_total) != null) {
-    const line = tw.total.line ?? 0
-    const predTotal = num(pred.pred_total)!
-    const diff = predTotal - line
-    analysis.edges.push({
-      market: 'total',
-      market_label: '大小分',
-      selection: diff > 0 ? 'over' : 'under',
-      line,
-      odds: diff > 0 ? tw.total.over_odds : tw.total.under_odds,
-      model_value: Number(predTotal.toFixed(2)),
-      line_gap: Number(diff.toFixed(2)),
-      edge: null,
-      tier: Math.abs(diff) >= 5 ? 'mid' : Math.abs(diff) >= 2.5 ? 'low' : 'none',
-      note: 'edge 需階段二模型輸出總分分佈後精算',
-    })
-  }
-
-  // 上半場讓分
-  if (tw.h1_spread && pred && num(pred.pred_home_h1) != null && num(pred.pred_away_h1) != null) {
-    const line = tw.h1_spread.line ?? 0
-    const predH1Margin = num(pred.pred_home_h1)! - num(pred.pred_away_h1)!
-    const diff = predH1Margin + line
-    analysis.edges.push({
-      market: 'h1_spread',
-      market_label: '上半場讓分',
-      selection: diff > 0 ? 'home' : 'away',
-      line,
-      odds: diff > 0 ? tw.h1_spread.home_odds : tw.h1_spread.away_odds,
-      model_value: Number(predH1Margin.toFixed(2)),
-      line_gap: Number(diff.toFixed(2)),
-      edge: null,
-      tier: Math.abs(diff) >= 2 ? 'mid' : Math.abs(diff) >= 1 ? 'low' : 'none',
-    })
-  }
-
-  // 上半場大小分
-  if (tw.h1_total && pred && num(pred.pred_home_h1) != null && num(pred.pred_away_h1) != null) {
-    const line = tw.h1_total.line ?? 0
-    const predH1Total = num(pred.pred_home_h1)! + num(pred.pred_away_h1)!
-    const diff = predH1Total - line
-    analysis.edges.push({
-      market: 'h1_total',
-      market_label: '上半場大小分',
-      selection: diff > 0 ? 'over' : 'under',
-      line,
-      odds: diff > 0 ? tw.h1_total.over_odds : tw.h1_total.under_odds,
-      model_value: Number(predH1Total.toFixed(2)),
-      line_gap: Number(diff.toFixed(2)),
-      edge: null,
-      tier: Math.abs(diff) >= 3 ? 'mid' : Math.abs(diff) >= 1.5 ? 'low' : 'none',
-    })
-  }
-
-  return analysis
+  return byGame
 }
 
 /** 組裝賽事列表（含預測與盤口）—— 總覽頁的核心資料 */
@@ -286,13 +210,14 @@ async function buildGameList(db: any, tpeDate: string) {
     q.getLatestPredictions(db, ids),
     q.getLatestOdds(db, ids),
   ])
+  const pricing = await pricingByGame(db, oddsMap)
   return games.map((row) => {
     const pred = predMap.get(row.id) ?? null
     const oddsList = oddsMap.get(row.id) ?? []
     return {
       ...shapeGame(row),
       prediction: shapePrediction(pred),
-      odds: buildEdgeAnalysis(pred, oddsList),
+      odds: buildEdgeAnalysis(pred, oddsList, pricing == null ? null : (pricing.get(row.id) ?? [])),
     }
   })
 }
@@ -357,10 +282,12 @@ api.get('/games/:id', async (c) => {
       ),
     ])
 
+  const pricing = await pricingByGame(db, oddsList)
+
   return c.json({
     game: shapeGame(row),
     prediction: shapePrediction(pred),
-    odds: buildEdgeAnalysis(pred, oddsMapToList(oddsList, id)),
+    odds: buildEdgeAnalysis(pred, oddsMapToList(oddsList, id), pricing == null ? null : (pricing.get(id) ?? [])),
     odds_history: oddsHistory.map(shapeOdds),
     team_game_stats: teamStats,
     player_game_stats: playerStats,

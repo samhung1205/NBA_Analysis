@@ -111,6 +111,31 @@ export async function getLatestOdds(db: Db, gameIds: number[]) {
   return map
 }
 
+/**
+ * D.2：指定 odds snapshot 的定價結果（Python pricing engine 寫入 market_pricing_snapshots；這裡只讀、不計算）
+ * - 每個 snapshot 可能有多組定價（每次有新的預測就多一組）→ 取 analysis_as_of 最新、同時間取 prediction_id 最大的那組。
+ * - 表尚未建立（migration 0005 未套用）→ 回傳 null，API 以 pricing.status='unavailable' 呈現，不讓整個端點失敗。
+ */
+export async function getPricingForSnapshots(db: Db, snapshotIds: number[], pricingVersion: string) {
+  if (!snapshotIds.length) return [] as any[]
+  const ph = snapshotIds.map(() => '?').join(',')
+  try {
+    return await db.all<any>(
+      `SELECT m.* FROM market_pricing_snapshots m
+        WHERE m.odds_snapshot_id IN (${ph}) AND m.pricing_version = ?
+          AND m.analysis_as_of = (
+            SELECT MAX(m2.analysis_as_of) FROM market_pricing_snapshots m2
+             WHERE m2.odds_snapshot_id = m.odds_snapshot_id AND m2.pricing_version = m.pricing_version
+          )
+        ORDER BY m.odds_snapshot_id, m.id`,
+      [...snapshotIds, pricingVersion]
+    )
+  } catch (e) {
+    console.warn('market_pricing_snapshots 讀取失敗（migration 0005 未套用？）', (e as Error)?.message)
+    return null
+  }
+}
+
 /** 單場完整盤口歷史（供折線圖） */
 export async function getOddsHistory(db: Db, gameId: number) {
   return db.all<any>(

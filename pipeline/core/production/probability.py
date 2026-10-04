@@ -98,10 +98,15 @@ def predict_h1_total_probability(game_prediction, line: float, art) -> dict[str,
 
 
 def line_probability_from_prediction_row(row: dict[str, Any], target: str, line: float, *,
-                                         root: str | Path | None = None) -> dict[str, Any]:
-    """predictions 表的一列（含 features_json）→ 用「當時的 artifact 版本」重算機率（版本目錄不可變）。"""
+                                         root: str | Path | None = None,
+                                         art: art_mod.LoadedArtifact | None = None) -> dict[str, Any]:
+    """predictions 表的一列（含 features_json）→ 用「當時的 artifact 版本」重算機率（版本目錄不可變）。
+    art：呼叫端已載入的同一版本 artifact（D.2 定價一次處理多條線時避免重複載入）；版本不同 → ValueError。"""
     fj = row["features_json"] or {}
-    art = art_mod.load_version(fj["artifact_version"], root)
+    if art is None:
+        art = art_mod.load_version(fj["artifact_version"], root)
+    elif art.artifact_version != fj["artifact_version"]:
+        raise ValueError(f"prediction 的 artifact_version {fj['artifact_version']} ≠ 傳入的 {art.artifact_version}")
     pred = {"margin": row["pred_margin"], "total": row["pred_total"],
             "h1_margin": row["pred_home_h1"] - row["pred_away_h1"],
             "h1_total": row["pred_home_h1"] + row["pred_away_h1"]}[target]
