@@ -50,6 +50,8 @@ def guarded(fn: Callable) -> Callable:
 def job_specs() -> list[JobSpec]:
     # 延遲 import：純排程時間測試不需要載入資料層
     from .jobs.daily import fetch_injuries_job, fetch_schedule_and_scores_job, refresh_live_and_final_job
+    from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
+    from .production.retrain import retrain_job
 
     return [
         JobSpec("daily_schedule_scores", fetch_schedule_and_scores_job,
@@ -66,6 +68,20 @@ def job_specs() -> list[JobSpec]:
         JobSpec("injuries_offpeak", fetch_injuries_job,
                 CronTrigger(hour="11-23", minute="0,30", timezone=TPE),
                 "台灣 11:00~23:59 每 30 分鐘", startup_catchup=False),
+        # ---- C.5D：production 預測 / 重訓 ---- #
+        JobSpec("predict_early", early_prediction_job,
+                CronTrigger(hour=12, minute=20, timezone=TPE),
+                "每日 12:20（台灣，賽程同步後）：未來 36 小時比賽的 early 預測（≈ ET 賽事日 00:00，前一晚傷病報告）"),
+        JobSpec("predict_final", final_prediction_job,
+                IntervalTrigger(minutes=5, timezone=TPE),
+                "每 5 分鐘：開賽前 5~75 分鐘、尚未有 final 版本的比賽 → 開賽前約 60 分鐘重算"),
+        JobSpec("predict_injury_refresh", injury_refresh_job,
+                CronTrigger(minute="7,22,37,52", timezone=TPE),
+                "每 15 分鐘（傷病抓取之後）：最後一次預測後有新傷病報告 → 重算，實質變化才寫入", startup_catchup=False),
+        JobSpec("weekly_retrain", retrain_job,
+                CronTrigger(day_of_week="mon", hour=16, minute=0, timezone=TPE),
+                "每週一 16:00（台灣，美東凌晨無比賽）：重訓 → 檢查 → 原子寫入 → promote（失敗不影響現有模型）",
+                startup_catchup=False),
     ]
 
 

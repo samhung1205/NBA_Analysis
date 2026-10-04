@@ -103,14 +103,15 @@ def build_all(inp, timings=TIMINGS) -> tuple[dict[str, pd.DataFrame], dict[str, 
     frames, calibs = {}, {}
     for t in timings:
         t0 = time.time()
+        # trade_aware=False：保持 C.5C 評估時的 pregame-v2 定義（C.5D 的 v2.1 交易感知名單對應不回頭改寫已凍結的評估）
         df, cal = tf.build_temporal_features(inp.games, inp.derived, inp.players, inp.injury_index, timing=t,
-                                             return_calibrator=True)
+                                             return_calibrator=True, trade_aware=False)
         tf.assert_no_leakage(df)
         frames[t] = assemble(df, inp)
         calibs[t] = cal
         log.info("特徵 %s：%d 場 × %d 欄（%.1fs）", t, len(frames[t]), len(tf.feature_columns(df)), time.time() - t0)
     df, cal = tf.build_temporal_features(inp.games, inp.derived, inp.players, inp.injury_index, timing=DEFAULT_TIMING,
-                                         return_calibrator=True, fixed_p_absent=FIXED_P)
+                                         return_calibrator=True, fixed_p_absent=FIXED_P, trade_aware=False)
     tf.assert_no_leakage(df)
     frames["fixedP"] = assemble(df, inp)
     calibs["fixedP"] = cal

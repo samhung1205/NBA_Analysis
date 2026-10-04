@@ -147,15 +147,15 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-10-02
+- **最後更新**：2026-10-03
 
 ## 階段二進度
 
 - ✅ **Phase A** 資料基礎：fetcher、排程器、回填（C.5A 另做了來源 fallback / 排程 / 傷病硬化）
 - ✅ **Phase B** Baseline：特徵工程、Elo walk-forward 回測
 - ✅ **Phase C.5B** 歷史資料完整度：五季 box score / 衍生進階指標 / 歷史傷病快照 / 賽前特徵底座（見下方「Phase C.5B」）
-- ✅ **Phase C.5C** 時間尺度特徵 + walk-forward 重新評估：勝負與分差/總分/上半場**全部**優於 Elo / baseline（評估完成，尚未上線；見下方「Phase C.5C」）
-- 🟡 **Phase C** ML：線上仍是 ml-v1.0（只有勝負達標）；C.5C 的新模型留待 C.5D 上線
+- ✅ **Phase C.5C** 時間尺度特徵 + walk-forward 重新評估：勝負與分差/總分/上半場**全部**優於 Elo / baseline（見下方「Phase C.5C」）
+- ✅ **Phase C.5D** Production inference：C.5C 模型（ml-v2.0）版本化 artifact、每週重訓、未開賽比賽特徵、early / 開賽前 60 分鐘 / 傷病觸發預測排程（見下方「Phase C.5D」）。正式 DB 尚無 2026-27 賽程，開季前一天起由排程產生預測
 
 ### 尚未實作
 
@@ -179,7 +179,8 @@ npm run db:reset:local     # 重置本機資料庫
 
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
-3. Phase C.5D（C.5C 模型上線：production inference）→ 再進 Phase D
+3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
+4. Phase C.5E（分差/總分機率分佈）→ 再進 Phase D
 
 ## 待與使用者確認的事項
 
@@ -277,11 +278,32 @@ python run_build_features.py --offset 0           # 賽前特徵 → pipeline/ar
 兩個評測賽季單獨看也都較好。勝負/分差的改善主要來自傷病與球員可用性，總分類來自本季節奏/得失分；上季先驗/名單延續性只有很小的增量；
 XGBoost 在驗證賽季全數輸給邏輯迴歸 / Ridge，未採用。`cd pipeline && python -m core.jobs.c5c_evaluate`（只評測，不寫 DB）。
 
+### Phase C.5D — Production inference & model lifecycle（2026-10）
+
+C.5C 選定模型以 `model_version='ml-v2.0'`（特徵 pregame-v2.1：v2 + 交易感知名單對應）上線。詳見 [docs/phase-c5d-report.md](docs/phase-c5d-report.md)。
+
+```bash
+cd pipeline
+python run_retrain.py                      # 重訓（cutoff=現在）→ 上線前檢查 → 原子寫入 artifacts/production/ → promote
+python run_retrain.py --list               # 版本清單；--rollback [--to <版本>] 回滾（不刪除任何版本）
+python run_predict.py --kind early         # 未來 36 小時比賽（--dry-run 只計算不寫入）
+python run_predict.py --kind final         # 開賽前 5~75 分鐘、尚無 final 版本者
+python run_predict.py --kind refresh       # 最後一次預測後有新傷病報告才重算，實質變化才寫入
+```
+
+- 排程（台灣）：12:20 early、每 5 分鐘 final（≈ 開賽前 60 分鐘）、:07/:22/:37/:52 傷病觸發 refresh、週一 16:00 重訓。
+- artifact 自足（模型、特徵順序、scaler、收縮參數、補值常數、傷病校準狀態、訓練 cutoff / 賽季 / metadata）；版本不相容會明確失敗。
+- `predictions` schema 不變：同一輸入重跑不新增（input_hash），輸入有實質變化才新增一筆（`features_json.supersedes` 可追蹤）。
+- `features_json` 新增 `artifact_version`、`training_cutoff_utc`、`prediction_kind`、`data_quality.flags`（`season_opener` / `low_sample` / `injury_unknown`…）、`target_contributions`（Ridge 精確線性分解，非 SHAP）；`contributions` 格式不變。
+- `elo_ratings` 表已過期（C.5B 修正比分後未重算），production 改用重播的 Elo（`core/models/elo_state.py`）。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase C.5D：C.5C 模型的 production inference
+### [下一步] Phase C.5E：分差 / 總分機率分佈
 
-以 C.5C 選定的模型與 pregame-v2 特徵產生實際預測（傷病校準器狀態持久化、定期重訓、開季名單延續性未知的處理），見 C.5C 報告 §14。
+以 C.5C walk-forward 評測殘差擬合分佈（讓分/大小分機率），見 C.5D 報告 §15。
+
+### [已完成] Phase C.5D：C.5C 模型的 production inference（見上）
 
 ### [已完成] Phase C.5C：用新資料層重新評估模型
 

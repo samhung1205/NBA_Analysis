@@ -106,3 +106,33 @@ def test_guarded_swallows_exceptions():
     def boom():
         raise RuntimeError("x")
     assert guarded(boom)() is None
+
+
+# ---------------- C.5D：預測 / 重訓排程 ---------------- #
+
+def test_prediction_and_retrain_jobs_timing():
+    specs = job_specs()
+    ids = {s.id for s in specs}
+    assert {"predict_early", "predict_final", "predict_injury_refresh", "weekly_retrain"} <= ids
+    # 台灣 11:00 → early 今天 12:20（在 12:00 賽程同步之後）
+    t = next_run_times(specs, utc(2026, 10, 2, 3, 0))
+    assert t["predict_early"] == datetime(2026, 10, 2, 12, 20, tzinfo=TPE)
+    assert t["predict_early"] > t["daily_schedule_scores"]
+    # 傷病觸發 refresh：:07 / :22 / :37 / :52（傷病抓取 :00/:15/:30/:45 之後）
+    assert next_run_times(specs, utc(2026, 10, 2, 2, 16))["predict_injury_refresh"] == datetime(2026, 10, 2, 10, 22, tzinfo=TPE)
+    assert next_run_times(specs, utc(2026, 10, 2, 15, 53))["predict_injury_refresh"] == datetime(2026, 10, 3, 0, 7, tzinfo=TPE)
+    # 每週一 16:00（台灣）= 美東週一凌晨，沒有比賽
+    nxt = next_run_times(specs, utc(2026, 10, 2, 3, 0))["weekly_retrain"]          # 2026-10-02 是週五
+    assert nxt == datetime(2026, 10, 5, 16, 0, tzinfo=TPE) and nxt.weekday() == 0
+    trig = {s.id: s.trigger for s in specs}["predict_final"]
+    assert trig.interval == timedelta(minutes=5)
+    # 重訓與 refresh 不在啟動時補跑（避免啟動就重訓 / 與 peak 傷病同時）
+    catch = {s.id: s.startup_catchup for s in specs}
+    assert catch["weekly_retrain"] is False and catch["predict_injury_refresh"] is False
+
+
+def test_final_window_covers_t_minus_60_with_5_minute_polling():
+    """每 5 分鐘檢查、視窗 5~75 分鐘：任何開賽時間都會在開賽前 60~75 分鐘之間被 final 選中一次。"""
+    from core.production.predict import FINAL_WINDOW
+    from core.production.inference import MIN_LEAD
+    assert FINAL_WINDOW - timedelta(minutes=5) >= timedelta(minutes=60) > MIN_LEAD
