@@ -99,6 +99,38 @@ ok('  國際盤各 bookmaker 獨立定價（不平均）',
 const spEdge = g0?.odds?.edges?.find((e) => e.market === 'spread')
 ok('  讓分 edge 以機率計算（不再用 line_gap）', spEdge?.edge != null && spEdge?.line_gap === null && spEdge?.deprecated === true)
 
+// D.3：理論注碼（Python sizing engine 寫入 bet_sizing_snapshots；API 只讀）——這裡只驗證不變量，不重算 Kelly
+const EPS = 1e-9
+const sz = g0?.odds?.sizing
+ok('  odds.sizing 存在（risk-v1、已 sizing、policy 0.25 / 2% / 3% / 8%）',
+  sz?.risk_policy_version === 'risk-v1' && sz?.status === 'sized' && sz?.policy?.kelly_multiplier === 0.25 &&
+  sz?.policy?.max_bet_fraction === 0.02 && sz?.policy?.max_game_fraction === 0.03 && sz?.policy?.max_day_fraction === 0.08,
+  `status=${sz?.status}`)
+const sOut = (pr?.markets || []).flatMap((m) => m.outcomes).map((o) => o.sizing).filter(Boolean)
+ok('  每個定價 outcome 都有 sizing（full / 分數 / 上限後 / 最終 / 資格 / 原因 / 警示）',
+  sOut.length > 0 && sOut.length === (pr?.markets || []).flatMap((m) => m.outcomes).length &&
+  sOut.every((s) => 'full_kelly_fraction' in s && 'fractional_kelly_fraction' in s && 'single_bet_capped_fraction' in s &&
+    s.final_stake_fraction != null && !!s.qualification_status && Array.isArray(s.reasons) && Array.isArray(s.warnings)))
+ok('  最終 ≤ 單筆上限後 ≤ 分數 Kelly ≤ full Kelly；單筆 ≤ 2%',
+  sOut.every((s) => s.full_kelly_fraction == null ||
+    (s.final_stake_fraction <= s.single_bet_capped_fraction + EPS && s.single_bet_capped_fraction <= s.fractional_kelly_fraction + EPS &&
+     s.fractional_kelly_fraction <= s.full_kelly_fraction + EPS && s.single_bet_capped_fraction <= 0.02 + EPS)))
+ok('  EV ≤ 0 → stake 0；actionable ⇔ 最終 > 0',
+  sOut.every((s) => (s.ev_per_unit > 0 || s.final_stake_fraction === 0) && s.actionable === (s.final_stake_fraction > 0)))
+ok('  同一場合計 ≤ 3%（含台彩 + 國際盤 + 各玩法）',
+  sOut.reduce((a, s) => a + s.final_stake_fraction, 0) <= 0.03 + EPS && sOut.some((s) => s.actionable))
+ok('  同一市場最多一個 outcome 有正注碼', (pr?.markets || []).every((m) => m.outcomes.filter((o) => o.sizing?.final_stake_fraction > 0).length <= 1))
+ok('  deprecated edges[].kelly_quarter 仍為 null（Kelly 只在 odds.sizing）', (g0?.odds?.edges || []).every((e) => e.kelly_quarter === null))
+const daySz = await req(`/api/sizing?date=${sz?.betting_day}`)
+const dayOut = (daySz.body?.games || []).flatMap((g) => g.outcomes)
+ok('GET /api/sizing?date=<betting day> 200：單日合計 ≤ 8%、等於 daily_exposure.after',
+  daySz.status === 200 && daySz.body?.status === 'sized' && dayOut.length > 0 &&
+  daySz.body.daily_exposure.after <= 0.08 + EPS &&
+  Math.abs(dayOut.reduce((a, s) => a + s.final_stake_fraction, 0) - daySz.body.daily_exposure.after) < 1e-9,
+  `status=${daySz.status}/${daySz.body?.status}`)
+ok('  每場合計 ≤ 3%', (daySz.body?.games || []).every((g) => g.outcomes.reduce((a, s) => a + s.final_stake_fraction, 0) <= 0.03 + EPS))
+ok('GET /api/sizing?date=abc 回 400', (await req('/api/sizing?date=abc')).status === 400)
+
 // today / 任意日期
 const today = await req('/api/games/today')
 ok('GET /api/games/today 200 且有進行中/已結束賽事', today.status === 200 && today.body.games.length > 0)

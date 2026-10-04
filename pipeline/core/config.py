@@ -46,7 +46,6 @@ class Settings:
     twsport_base_url: str | None = field(default=None)
     alert_webhook_url: str | None = field(default=None)
     model_version: str = field(default="elo-v1.0")
-    kelly_fraction: float = field(default=0.25)
     # ---- Phase D.1 盤口 ---- #
     twsport_enabled: bool = field(default=True)
     twsport_headless: bool = field(default=True)
@@ -75,7 +74,6 @@ def load_settings() -> Settings:
         twsport_base_url=_env("TWSPORT_BASE_URL") or None,
         alert_webhook_url=_env("ALERT_WEBHOOK_URL") or None,
         model_version=_env("MODEL_VERSION") or "elo-v1.0",
-        kelly_fraction=_env_float("KELLY_FRACTION", 0.25),
         twsport_enabled=_env_bool("TWSPORT_ENABLED", True),
         twsport_headless=_env_bool("TWSPORT_HEADLESS", True),
         twsport_browser_channel=(_env("TWSPORT_BROWSER_CHANNEL", "chrome") or None),

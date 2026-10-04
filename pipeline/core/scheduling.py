@@ -53,7 +53,7 @@ def job_specs() -> list[JobSpec]:
     from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
     from .production.retrain import retrain_job
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
-    from .pricing.job import pricing_job_scheduled
+    from .sizing.job import pricing_and_sizing_scheduled
     from .config import settings
 
     return [
@@ -94,10 +94,11 @@ def job_specs() -> list[JobSpec]:
                 "每日 4 次（台灣 00/06/12/18:40，ODDS_API_CRON_HOURS 可調）：The Odds API 全場盤（3 credits/次，"
                 "免費方案 500/月；先打不扣額度的 events，無比賽不花額度）", startup_catchup=False),
         # ---- D.2：定價（只讀 DB + 本機 artifact，不打外部來源；冪等） ---- #
-        JobSpec("market_pricing", pricing_job_scheduled,
+        # ---- D.3：同一個 T 接著做 sizing（qualification / Kelly / risk-v1 exposure；不推薦、不寫 bets） ---- #
+        JobSpec("market_pricing", pricing_and_sizing_scheduled,
                 CronTrigger(minute="1-59/5", timezone=TPE),
                 "每 5 分鐘（:01/:06/…，盤口 :03/:33/:40 與預測寫入之後）：最新盤口 × 當時最新有效預測 → "
-                "去水 / 模型機率 / edge / EV（不做 Kelly / 推薦）"),
+                "去水 / 模型機率 / edge / EV（D.2）→ 同一 T 的理論注碼 sizing（D.3；不是推薦）"),
     ]
 
 

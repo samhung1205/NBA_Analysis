@@ -6,7 +6,7 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）已實作，D.3 起尚未。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）、D.3（qualification / Kelly sizing / 風險上限）已實作，D.4 起尚未。
 
 ## 目前完成的功能
 
@@ -28,6 +28,7 @@
 |---|---|---|
 | 5 | `GET /api/games/tomorrow` | 隔日（台灣時間）賽事 + 最新 predictions/odds + edge 分析 |
 | — | `GET /api/games/today` | 今日賽事 |
+| — | `GET /api/sizing?date=YYYY-MM-DD` | D.3：該台灣日期（betting day）最新一次理論注碼與單日 / 單場 exposure（Python 計算；只讀、非推薦） |
 | — | `GET /api/games?date=YYYY-MM-DD` | 任意台灣日期（格式錯誤回 400） |
 | 6 | `GET /api/games/:id` | 單場詳情：box score、H2H、近況、特徵拆解、盤口歷史、傷病 |
 | 7 | `GET /api/injuries/today?date=` | 當日各隊傷病報告（含主力缺陣警示） |
@@ -42,14 +43,14 @@
 
 ### 驗收測試
 ```bash
-npm run test:api        # 96 項檢查，需服務已啟動
+npm run test:api        # 106 項檢查，需服務已啟動
 ```
 > ⚠️ 這組檢查依賴 **seed 測試資料**（明日 3 場、今日進行中等）。正式 Supabase 已回填真實賽事、seed 賽事已清除，
 > 對它執行會有「games=0」類失敗，屬預期。請對本機 D1 seed 執行（`npm run db:reset:local`，並暫時不要讓 `.dev.vars`
 > 的 `DATABASE_URL` 生效，例如啟動時改用 `--binding SESSION_SECRET=...`）。
 涵蓋：6 個頁面渲染、全部 API 契約、D.2 定價讀取（去水總和 = 1、edge = 模型 − 公允、bookmaker 分開）、抽水 > 0、授權保護（401）、
 bets 寫入→讀回→結算→刪除、ROI 以台彩實際賠率計算、404/400 錯誤處理。
-**目前結果：96 通過 / 0 失敗**（D.2：原 90 項 + 6 項定價檢查）。
+**目前結果：106 通過 / 0 失敗**（D.2：原 90 項 + 6 項定價檢查；D.3：+10 項理論注碼不變量檢查）。
 
 ## 資料架構
 
@@ -160,10 +161,11 @@ npm run db:reset:local     # 重置本機資料庫
 
 - ✅ **Phase D.1** 盤口擷取與市場正規化：canonical market / 讓分正負號慣例、賽事對應層、快照去重（歷史不覆蓋）、台彩 / The Odds API adapter、排程與來源健康度（見下方「Phase D.1」）
 - ✅ **Phase D.2** 去水 / 模型機率 / edge / EV：單一 Python 定價引擎、push / 三向 / 不明結算處理、時間對齊、`market_pricing_snapshots`（見下方「Phase D.2」）
+- ✅ **Phase D.3** qualification / push-aware Kelly / risk-v1（¼ Kelly、單筆 2%、同場 3%、單日 8%）/ 互斥與新鮮度檢查、`bet_sizing_snapshots`（見下方「Phase D.3」）
 
 ### 尚未實作
 
-- **Phase D.3+** 排序 / 篩選、Kelly、推薦清單、ROI 回測
+- **Phase D.4+** 歷史 ROI backtest、推薦清單（D.5）
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
 ### 階段一已為階段二預留的接口
@@ -174,6 +176,7 @@ npm run db:reset:local     # 重置本機資料庫
 | `predictions`（含 `features_json.contributions`） | 總覽卡片、詳情頁特徵拆解 |
 | `odds_snapshots`（`source='twsport'` / `'oddsapi'`） | 盤口比較表、變動折線圖 |
 | `market_pricing_snapshots`（D.2 定價 job 寫入） | 詳情頁盤口定價表、總覽 Edge 標示 |
+| `bet_sizing_snapshots`（D.3 sizing，與定價同一 job） | 詳情頁理論注碼表、`/api/sizing` |
 | `injuries`（最新狀態；球員從報告消失 → 補 `Available`） | 傷病中心、主力缺陣警示、詳情頁 |
 | `data_sources` | 系統狀態頁（含 warn/error 告警） |
 | `model_metrics` | 回測績效頁 |
@@ -185,12 +188,12 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. 套用 `0005_phase_d2.sql`（`npm run db:migrate:pg`），排程器的 `market_pricing` 才會寫入定價（0004 與 `ODDS_API_KEY` 已完成）
+4. 套用 `0006_phase_d3.sql`（`npm run db:migrate:pg`），排程器的 `market_pricing` 才會在定價後寫入理論注碼（0004 / 0005 與 `ODDS_API_KEY` 已完成）
 
 ## 待與使用者確認的事項
 
 1. ~~**Edge 精算範圍**~~：D.2 已完成——所有市場的 edge 都改為機率型（`edge_vs_fair = 模型 − 去水公允`），線差（`line_gap`）不再稱為 edge；
-   ¼Kelly 暫停（`kelly_quarter = null`，D.3+ 再決定）。見 [docs/phase-d2-report.md](docs/phase-d2-report.md)。
+   Kelly 於 D.3 以 push-aware 公式重做（`odds.sizing`；`kelly_quarter` 維持 null）。見 [docs/phase-d2-report.md](docs/phase-d2-report.md)、[docs/phase-d3-report.md](docs/phase-d3-report.md)。
 2. **球隊中文名**：目前 seed 用常見譯名，若你有偏好的譯名（如「塞爾提克」vs「凱爾特人」）可調整
 3. **正式部署與 Hyperdrive**：目前修正（每請求獨立連線）已驗證穩定可用；若之後要正式對外開放給多人使用，
    建議評估改用 Cloudflare Hyperdrive 以消除連線延遲，見上方「連線模式踩坑記錄」
@@ -348,14 +351,35 @@ python run_pricing.py --game-id 123 --as-of 2026-10-21T22:00:00Z  # 歷史重建
 - **模型機率**一律經 `probability.line_probability_from_prediction_row()`（prediction 列記錄的 artifact 版本）；全場獨贏 = P(margin > 0)，邏輯迴歸勝率只作 > 5 pp 一致性警示。
 - **台彩上半場三向**：主 / 和 / 客一起去水，和局是 outcome（不是 push）；**兩向上半場獨贏**結算不明 → 只算 raw / 去水，不算 edge / EV；四分之一線不支援。
 - **時間對齊**：snapshot `fetched_at ≤ T`、預測 `max(created_at, prediction_as_of) ≤ T` 的最新有效一筆；違反即拒絕。
-- **Migration**：`migrations/postgres/0005_phase_d2.sql`（**正式 DB 尚未套用**；未套用時 job 不定價、API `pricing.status = unavailable`）。排程 `market_pricing` 每 5 分鐘。
+- **Migration**：`migrations/postgres/0005_phase_d2.sql`（2026-10-04 已套用到正式 DB；未套用時 job 不定價、API `pricing.status = unavailable`）。排程 `market_pricing` 每 5 分鐘。
 - **API**：新增 `odds.pricing`（每 bookmaker × 市場 × outcome）；`odds.edges[]` 保留形狀但 deprecated、只由 pricing 導出，`kelly_quarter` / `line_gap` 為 null。
+
+### Phase D.3 — Bet qualification, risk controls & Kelly sizing（2026-10）
+
+在 D.2 定價結果上做 qualification、push-aware Kelly、凍結的 risk-v1 上限與決定性組合縮放；**不做** ROI backtest / 以 ROI 調參 / best-book / consensus / 排序推薦 / multivariate Kelly / 寫入 bets。詳見 [docs/phase-d3-report.md](docs/phase-d3-report.md)。
+
+```bash
+cd pipeline
+python run_sizing.py --dry-run                     # T = 現在：qualification + Kelly + exposure（不寫入）
+python run_sizing.py --dry-run --bankroll 10000    # 另外輸出 stake_amount（只顯示；DB 只存 bankroll 比例）
+python run_sizing.py                               # 寫入 bet_sizing_snapshots（冪等；排程已自動在定價後執行）
+```
+
+- **唯一實作**：`pipeline/core/sizing/`（`kelly` → `engine.size_portfolio` → `job`）。Node API / 前端只讀 `bet_sizing_snapshots`，不含任何 Kelly / 上限 / 縮放運算。
+- **Kelly（凍結）**：f* = (p_win·b − p_loss) / (b·(p_win + p_loss)) = EV / (b·(1 − p_push))，b = 實際賠率 − 1；EV ≤ 0 → 0。**不使用 edge_vs_fair**（只作診斷）。三向和局：p_win = P(和)、其餘為 loss。
+- **risk-v1（凍結，非 ROI 調出）**：full × 0.25 → 單筆 ≤ 2% → 同場（含不同玩法 / bookmaker）合計 ≤ 3% → 同一 betting day（開賽的 Asia/Taipei 日期）合計 ≤ 8%；超過等比例縮放，不排序砍單。`KELLY_FRACTION` 環境變數已移除。
+- **Qualification**：`eligible` / `exposure_scaled` / `no_positive_ev` / `stale_quote` / `mutually_exclusive_positive_kelly` / `unsupported_settlement` / `market_not_open` / `no_prediction` / `invalid_probability` / `unavailable`，附 `reasons[]` / `warnings[]`；`mathematically_eligible` 與 `actionable` 分開，兩者都不是推薦。
+- 資料品質旗標只顯示 warning、不改 stake；同一 snapshot 互斥 outcome 同時正 Kelly → 整個市場拒絕；報價 last_seen 超過 2 × 來源輪詢間隔（台彩 60 分、Odds API 12 小時）→ stale、不 actionable。
+- **Migration**：`migrations/postgres/0006_phase_d3.sql`（**正式 DB 尚未套用**；未套用時 sizing 不寫入、API `sizing.status = unavailable`）。唯一鍵 (定價列, policy, sizing 版本, portfolio_key)：重跑冪等、policy 改版或組合改變產生新列、舊列不改寫。
+- **API**：`odds.sizing`、`odds.pricing.markets[].outcomes[].sizing`、`GET /api/sizing?date=`；詳情頁「理論注碼（risk-adjusted stake）」表。
 
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase D.3
+### [下一步] Phase D.4
 
-讀 `market_pricing_snapshots` 設計排序 / 篩選（Kelly 與推薦屬後續階段）；真實資料驗證需先套用 0005 並累積開季後盤口。
+歷史 ROI backtest：`price_game_as_of` → `sizing.job.size_pricings`（只用 T 以前資料、risk-v1 不得依結果調整）；需先定義決策時點與結算，並等開季後實際累積盤口（以台彩實際賠率計算）。
+
+### [已完成] Phase D.3：qualification / Kelly sizing / 風險上限（見上）
 
 ### [已完成] Phase D.2：去水 / 定價 / edge / EV（見上）
 

@@ -15,6 +15,7 @@ import {
   formatTpe,
 } from '../lib/time'
 import { PRICING_VERSION, legacyEdges, shapePricing } from '../lib/pricing'
+import { RISK_POLICY_VERSION, attachSizing, shapeDaySizing } from '../lib/sizing'
 import { getCurrentUser } from '../lib/auth'
 
 type Env = { Bindings: AppBindings }
@@ -150,7 +151,7 @@ function bookRank(b: string | null) {
  * D.2：去水 / 模型機率 / edge / EV 一律由 Python pricing engine 計算並寫入 market_pricing_snapshots，
  * 這裡只讀取與分組（不在 TS 重算任何機率）。台彩(twsport)與每家國際 bookmaker 各自獨立定價，不平均、不挑最佳。
  */
-function buildEdgeAnalysis(pred: any, oddsList: any[], pricingRows: any[] | null) {
+function buildEdgeAnalysis(pred: any, oddsList: any[], pricingRows: any[] | null, sizingRows: any[] | null) {
   const shaped = oddsList.map(shapeOdds)
   const pick = (source: string, market: string) =>
     shaped
@@ -175,16 +176,20 @@ function buildEdgeAnalysis(pred: any, oddsList: any[], pricingRows: any[] | null
     shaped.map((o) => Number(o.id)),
     pred?.id != null ? Number(pred.id) : null
   )
+  // D.3：理論注碼（Python sizing engine 寫入 bet_sizing_snapshots；這裡只對照到各 outcome，不計算）
+  const sizing = attachSizing(pricing, pricingRows == null ? null : sizingRows)
   return {
     twsport: tw,
     international: intl,
     international_books: shaped.filter((o) => o.source === 'oddsapi'),
+    sizing,
     // D.2 正式欄位：每個 bookmaker × 市場 × outcome 的 raw implied / 去水 / 模型 / push / edge / EV
     pricing,
     // deprecated：階段一形狀，僅由 pricing 導出（台彩、已定價市場）；kelly_quarter / line_gap 為 null
     edges: legacyEdges(pricing),
     edges_deprecated: 'edges[] 已停用新功能：請改讀 odds.pricing.markets（edge = edge_vs_fair = model_prob − fair_no_vig_prob）。'
-      + 'D.2 不做 Kelly / 下注金額 / 推薦；讓分與大小分不再以線差（line_gap）當 edge。',
+      + '讓分與大小分不再以線差（line_gap）當 edge；kelly_quarter 保持 null——D.3 理論注碼請讀 odds.sizing 與 '
+      + 'odds.pricing.markets[].outcomes[].sizing（Python 計算）。',
   }
 }
 
@@ -192,6 +197,21 @@ function buildEdgeAnalysis(pred: any, oddsList: any[], pricingRows: any[] | null
 async function pricingByGame(db: any, oddsMap: Map<number, any[]>) {
   const ids = [...oddsMap.values()].flat().map((o) => Number(o.id))
   const rows = await q.getPricingForSnapshots(db, ids, PRICING_VERSION)
+  if (rows == null) return null
+  const byGame = new Map<number, any[]>()
+  for (const r of rows) {
+    const g = Number(r.game_id)
+    if (!byGame.has(g)) byGame.set(g, [])
+    byGame.get(g)!.push(r)
+  }
+  return byGame
+}
+
+/** 一批定價列 → 最新 sizing 列（按 game 分組）；表不存在 → null */
+async function sizingByGame(db: any, pricing: Map<number, any[]> | null) {
+  if (pricing == null) return null
+  const ids = [...pricing.values()].flat().map((r) => Number(r.id))
+  const rows = await q.getSizingForPricing(db, ids, RISK_POLICY_VERSION)
   if (rows == null) return null
   const byGame = new Map<number, any[]>()
   for (const r of rows) {
@@ -211,13 +231,19 @@ async function buildGameList(db: any, tpeDate: string) {
     q.getLatestOdds(db, ids),
   ])
   const pricing = await pricingByGame(db, oddsMap)
+  const sizing = await sizingByGame(db, pricing)
   return games.map((row) => {
     const pred = predMap.get(row.id) ?? null
     const oddsList = oddsMap.get(row.id) ?? []
     return {
       ...shapeGame(row),
       prediction: shapePrediction(pred),
-      odds: buildEdgeAnalysis(pred, oddsList, pricing == null ? null : (pricing.get(row.id) ?? [])),
+      odds: buildEdgeAnalysis(
+        pred,
+        oddsList,
+        pricing == null ? null : (pricing.get(row.id) ?? []),
+        sizing == null ? null : (sizing.get(row.id) ?? [])
+      ),
     }
   })
 }
@@ -283,11 +309,17 @@ api.get('/games/:id', async (c) => {
     ])
 
   const pricing = await pricingByGame(db, oddsList)
+  const sizing = await sizingByGame(db, pricing)
 
   return c.json({
     game: shapeGame(row),
     prediction: shapePrediction(pred),
-    odds: buildEdgeAnalysis(pred, oddsMapToList(oddsList, id), pricing == null ? null : (pricing.get(id) ?? [])),
+    odds: buildEdgeAnalysis(
+      pred,
+      oddsMapToList(oddsList, id),
+      pricing == null ? null : (pricing.get(id) ?? []),
+      sizing == null ? null : (sizing.get(id) ?? [])
+    ),
     odds_history: oddsHistory.map(shapeOdds),
     team_game_stats: teamStats,
     player_game_stats: playerStats,
@@ -303,6 +335,20 @@ api.get('/games/:id', async (c) => {
 function oddsMapToList(map: Map<number, any[]>, id: number) {
   return map.get(id) ?? []
 }
+
+/* ------------------------------------------------------------------ */
+/* D.3  GET /api/sizing?date=YYYY-MM-DD — 單一 betting day 的理論注碼    */
+/* ------------------------------------------------------------------ */
+
+/** 該台灣日期最新一次 sizing 的全部 outcome 與單日 / 單場 exposure（Python 計算；只讀、不排序、不推薦） */
+api.get('/sizing', async (c) => {
+  const db = await getDb(c.env)
+  const date = c.req.query('date') || tomorrowTpe()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return c.json({ error: 'date 格式須為 YYYY-MM-DD（台灣時間 betting day）' }, 400)
+  }
+  return c.json(shapeDaySizing(date, await q.getSizingForDay(db, date, RISK_POLICY_VERSION)))
+})
 
 /* ------------------------------------------------------------------ */
 /* §3.3-7  GET /api/injuries/today                                     */

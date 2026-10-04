@@ -153,7 +153,7 @@
   /**
    * 盤口定價（D.2）：每個來源 / bookmaker / 市場 / outcome 一列。
    * 數字全部來自 Python pricing engine（odds.pricing），這裡不計算任何機率。
-   * 市場機率（原始隱含 / 去水公允）與模型機率分欄顯示，不混用；不顯示 Kelly / 下注建議。
+   * 市場機率（原始隱含 / 去水公允）與模型機率分欄顯示，不混用；理論注碼另見 sizingSection（D.3），不是下注建議。
    */
   function oddsSection(d) {
     const pr = d.odds?.pricing;
@@ -212,6 +212,88 @@
       <div class="overflow-x-auto">
         <table class="stat-table text-sm">
           <thead><tr><th>來源</th><th>玩法</th><th>選項</th><th>盤線</th><th>賠率</th><th>原始隱含</th><th>去水公允</th><th>模型</th><th>Push</th><th class="text-right">Edge</th><th class="text-right">EV</th><th class="text-right">抽水</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </section>`;
+  }
+
+  /**
+   * 理論注碼（D.3 sizing）：每個已計算 sizing 的 outcome 一列。
+   * Kelly / ¼ Kelly / 單筆上限 / 同場與單日縮放全部由 Python（bet_sizing_snapshots）計算，這裡只顯示、不計算、不排序。
+   * 用語中性：理論注碼 / risk-adjusted stake；不是投注建議、不是推薦清單。
+   */
+  const SIZING_STATUS = {
+    eligible: ['合格', 'low'],
+    exposure_scaled: ['合格（exposure 縮放）', 'low'],
+    no_positive_ev: ['EV ≤ 0', 'none'],
+    stale_quote: ['報價過舊', 'none'],
+    unsupported_settlement: ['結算不支援', 'none'],
+    market_not_open: ['未開盤 / 已開賽', 'none'],
+    no_prediction: ['無模型機率', 'none'],
+    invalid_probability: ['機率異常', 'none'],
+    mutually_exclusive_positive_kelly: ['互斥 outcome 同時為正（拒絕）', 'none'],
+    unavailable: ['不可用', 'none'],
+  };
+
+  function sizingSection(d) {
+    const sz = d.odds?.sizing;
+    const markets = d.odds?.pricing?.markets || [];
+    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-shield-halved mr-1.5 text-slate-500"></i>理論注碼（risk-adjusted stake，bankroll 比例）</h2>`;
+    const rowsData = markets.flatMap((m) => m.outcomes.filter((o) => o.sizing).map((o) => ({ m, o, s: o.sizing })));
+    if (!sz || !rowsData.length) {
+      const msg = sz?.status === 'unavailable'
+        ? 'sizing 資料表尚未建立（migration 0006）。'
+        : '尚無 sizing 結果（定價後由排程計算）。';
+      return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">${head}
+        <p class="text-sm text-slate-500">${msg}</p></section>`;
+    }
+    const g = d.game;
+    const sideLabel = (x) =>
+      ({ home: NBA.teamName(g.home), away: NBA.teamName(g.away), draw: '和局', over: '大分', under: '小分' })[x] || x;
+    const bookLabel = (m) => (m.source === 'twsport' ? '台彩' : m.bookmaker);
+    const pct = (v, dp = 2) => (v != null ? NBA.pct(v, dp) : '—');
+    const pol = sz.policy || {};
+    const ge = sz.game_exposure || {};
+    const de = sz.daily_exposure || {};
+    const rows = rowsData
+      .map(({ m, o, s }) => {
+        const [label, cls] = SIZING_STATUS[s.qualification_status] || [s.qualification_status, 'none'];
+        const notes = [...(s.reasons || []), ...(s.warnings || [])].join(', ');
+        return `<tr>
+          <td class="text-xs text-slate-400">${NBA.esc(bookLabel(m))}</td>
+          <td class="text-xs text-slate-300">${NBA.esc(m.market_label || m.market)}</td>
+          <td class="text-xs">${NBA.esc(sideLabel(o.side))}</td>
+          <td class="text-xs num">${NBA.odds(s.decimal_odds)}</td>
+          <td class="text-xs num text-slate-400">${pct(s.p_win, 1)} / ${pct(s.p_push, 1)} / ${pct(s.p_loss, 1)}</td>
+          <td class="text-xs num text-right ${s.ev_per_unit > 0 ? 'text-green-400' : 'text-slate-400'}">${s.ev_per_unit != null ? NBA.signed(s.ev_per_unit * 100, 1) + '%' : '—'}</td>
+          <td class="text-xs num text-right text-slate-400">${pct(s.full_kelly_fraction)}</td>
+          <td class="text-xs num text-right text-slate-400">${pct(s.fractional_kelly_fraction)}</td>
+          <td class="text-xs num text-right text-slate-400">${pct(s.single_bet_capped_fraction)}</td>
+          <td class="text-xs num text-right ${s.actionable ? 'text-orange-300 font-semibold' : 'text-slate-600'}">${pct(s.final_stake_fraction)}</td>
+          <td class="text-right">${NBA.edgeBadge(cls, label)}</td>
+          <td class="text-[10px] text-slate-500 max-w-[16rem]">${NBA.esc(notes)}</td>
+        </tr>`;
+      })
+      .join('');
+    return `
+    <section id="sizing-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
+      ${head}
+      <p class="text-[11px] text-slate-500 mb-2">
+        ${NBA.esc(pol.risk_policy_version || sz.risk_policy_version)}：push-aware full Kelly（只用 P(勝)、P(退款)、P(輸) 與實際賠率，不用 edge）
+        → Kelly × ${NBA.fixed(pol.kelly_multiplier, 2)} → 單筆上限 ${pct(pol.max_bet_fraction, 0)}
+        → 同場合計上限 ${pct(pol.max_game_fraction, 0)} → 單日（台灣日期）合計上限 ${pct(pol.max_day_fraction, 0)}，超過時等比例縮放。
+        資料品質旗標只顯示警示、不調整注碼。這是理論計算，不是投注建議。
+      </p>
+      <div class="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-400 mb-3">
+        <span>betting day <span class="num text-slate-200">${NBA.esc(sz.betting_day || '—')}</span></span>
+        <span>同場 exposure <span class="num text-slate-200">${pct(ge.before)} → ${pct(ge.after)}</span>（縮放 × ${NBA.fixed(ge.scale_factor, 3)}）</span>
+        <span>單日 exposure <span class="num text-slate-200">${pct(de.before)} → ${pct(de.after)}</span>（縮放 × ${NBA.fixed(de.scale_factor, 3)}）</span>
+        <span class="text-slate-600">計算時點 ${NBA.esc(NBA.tpe(sz.analysis_as_of))}</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="stat-table text-sm">
+          <thead><tr><th>來源</th><th>玩法</th><th>選項</th><th>賠率</th><th>P(勝 / 退 / 輸)</th><th class="text-right">EV</th><th class="text-right">Full Kelly</th><th class="text-right">分數 Kelly</th><th class="text-right">單筆上限後</th><th class="text-right">最終（風險調整）</th><th class="text-right">資格</th><th>原因 / 警示</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -430,6 +512,7 @@
       root.innerHTML =
         header(d.game, p) +
         oddsSection(d) +
+        sizingSection(d) +
         periodSection(d.game, p) +
         featureSection(p) +
         oddsChartSection() +

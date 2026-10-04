@@ -136,6 +136,55 @@ export async function getPricingForSnapshots(db: Db, snapshotIds: number[], pric
   }
 }
 
+/**
+ * D.3：指定定價列的最新 sizing（Python sizing engine 寫入 bet_sizing_snapshots；這裡只讀、不計算 Kelly / 上限 / 縮放）
+ * - 同一定價列在不同組合（portfolio_key）下可能有多組 sizing → 取 analysis_as_of 最新的一組。
+ * - 表尚未建立（migration 0006 未套用）→ 回傳 null，API 以 sizing.status='unavailable' 呈現。
+ */
+export async function getSizingForPricing(db: Db, pricingIds: number[], riskPolicyVersion: string) {
+  if (!pricingIds.length) return [] as any[]
+  const ph = pricingIds.map(() => '?').join(',')
+  try {
+    return await db.all<any>(
+      `SELECT s.* FROM bet_sizing_snapshots s
+        WHERE s.market_pricing_snapshot_id IN (${ph}) AND s.risk_policy_version = ?
+          AND s.analysis_as_of = (
+            SELECT MAX(s2.analysis_as_of) FROM bet_sizing_snapshots s2
+             WHERE s2.market_pricing_snapshot_id = s.market_pricing_snapshot_id
+               AND s2.risk_policy_version = s.risk_policy_version
+          )
+        ORDER BY s.market_pricing_snapshot_id, s.id`,
+      [...pricingIds, riskPolicyVersion]
+    )
+  } catch (e) {
+    console.warn('bet_sizing_snapshots 讀取失敗（migration 0006 未套用？）', (e as Error)?.message)
+    return null
+  }
+}
+
+/** D.3：某個 betting day（台灣日期）最新一次 sizing 的全部列（單日 exposure 檢視；只讀） */
+export async function getSizingForDay(db: Db, bettingDay: string, riskPolicyVersion: string) {
+  try {
+    return await db.all<any>(
+      `SELECT s.*, ht.abbr AS home_abbr, at.abbr AS away_abbr, g.date_utc
+         FROM bet_sizing_snapshots s
+         JOIN games g ON g.id = s.game_id
+         JOIN teams ht ON ht.id = g.home_team_id
+         JOIN teams at ON at.id = g.away_team_id
+        WHERE s.betting_day = ? AND s.risk_policy_version = ?
+          AND s.analysis_as_of = (
+            SELECT MAX(s2.analysis_as_of) FROM bet_sizing_snapshots s2
+             WHERE s2.betting_day = s.betting_day AND s2.risk_policy_version = s.risk_policy_version
+          )
+        ORDER BY g.date_utc, s.game_id, s.source, s.bookmaker, s.market, s.id`,
+      [bettingDay, riskPolicyVersion]
+    )
+  } catch (e) {
+    console.warn('bet_sizing_snapshots 讀取失敗（migration 0006 未套用？）', (e as Error)?.message)
+    return null
+  }
+}
+
 /** 單場完整盤口歷史（供折線圖） */
 export async function getOddsHistory(db: Db, gameId: number) {
   return db.all<any>(

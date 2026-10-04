@@ -14,6 +14,7 @@
  *   {{TPE:+1 08:00}}                           台灣時間「明天 08:00」→ UTC
  *   {{TPE:+0 10:00}}                           台灣時間「今天 10:00」
  *   {{TPE:-3 09:00}}                           台灣時間「3 天前 09:00」
+ *   {{TPEDATE:+1}}                             台灣日期「明天」→ 'YYYY-MM-DD'（D.3 betting_day）
  *
  * 用法：node scripts/render-seed.mjs [輸出路徑]
  */
@@ -53,6 +54,12 @@ export function renderSeed(template, now = new Date()) {
     )
     // tpeMidnightUtcMs 目前是「把台灣時刻當成 UTC」，減去 8 小時得到真正的 UTC
     return iso(tpeMidnightUtcMs - TPE_OFFSET_MS)
+  })
+
+  out = out.replace(/\{\{TPEDATE:([+-]\d+)\}\}/g, (_m, dayOffset) => {
+    const tpeNow = new Date(nowMs + TPE_OFFSET_MS)
+    const d = new Date(Date.UTC(tpeNow.getUTCFullYear(), tpeNow.getUTCMonth(), tpeNow.getUTCDate() + Number(dayOffset)))
+    return d.toISOString().slice(0, 10)
   })
 
   const leftover = out.match(/\{\{[^}]+\}\}/g)

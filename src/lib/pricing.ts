@@ -67,6 +67,7 @@ export function edgeTier(edge: number | null): 'none' | 'low' | 'mid' | 'high' {
 
 function shapeOutcome(r: any) {
   return {
+    pricing_id: r.id == null ? null : Number(r.id), // D.3：對照 odds.sizing / bet_sizing_snapshots.market_pricing_snapshot_id
     side: r.side,
     display_line: num(r.display_line),
     model_target: r.model_target ?? null,
@@ -165,7 +166,8 @@ export function shapePricing(rows: any[] | null, latestOpenSnapshotIds: number[]
  * D.2 起只由 Python 定價結果導出（台彩、已定價市場），不再在 TS 計算：
  *   - edge = edge_vs_fair（模型 − 去水公允機率）；讓分 / 大小分不再用 line_gap
  *   - selection = edge_vs_fair 較大的一邊（顯示用，不是投注推薦）
- *   - kelly_quarter / line_gap / model_value 保留欄位但為 null（D.2 不做 Kelly / 下注金額；線差不是 edge）
+ *   - kelly_quarter / line_gap / model_value 保留欄位但為 null（線差不是 edge；D.3 起 Kelly / 理論注碼改讀
+ *     odds.sizing 與 pricing.markets[].outcomes[].sizing，由 Python 計算，這裡不導出、不重算）
  * 新程式請改讀 odds.pricing.markets。
  */
 export function legacyEdges(pricing: { markets: any[] }) {

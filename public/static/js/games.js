@@ -195,7 +195,7 @@
       <div class="flex flex-wrap gap-4 text-xs text-slate-400">
         <span><i class="fas fa-basketball mr-1 text-slate-500"></i>賽事 <span class="text-slate-100 font-semibold num">${games.length}</span></span>
         <span><i class="fas fa-brain mr-1 text-slate-500"></i>已有預測 <span class="text-slate-100 font-semibold num">${withPred}</span></span>
-        <span><i class="fas fa-fire mr-1 text-slate-500"></i>值得關注機會 <span class="text-green-400 font-semibold num">${strong}</span></span>
+        <span><i class="fas fa-scale-balanced mr-1 text-slate-500"></i>edge ≥ 3% 的 outcome（市場分歧，非推薦） <span class="text-slate-100 font-semibold num">${strong}</span></span>
       </div>`;
   }
 

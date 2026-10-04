@@ -46,3 +46,17 @@ def test_market_pricing_every_5_minutes_after_odds_and_predictions():
     assert fires == [6, 11, 16] and t.utcoffset() == timedelta(hours=8)
     nxt = s.trigger.get_next_fire_time(None, datetime(2026, 10, 20, 12, 40, 30, tzinfo=TPE))
     assert (nxt.hour, nxt.minute) == (12, 41)
+
+
+def test_sizing_runs_in_same_job_right_after_pricing_with_same_as_of(monkeypatch):
+    """D.3：sizing 與定價在同一個排程 job、同一個 T（sizing 讀到的就是同一輪定價列）；沒有另外的 Kelly job。"""
+    from core.pricing import job as pricing_job_mod
+    from core.sizing import job as sizing_job_mod
+
+    assert spec("market_pricing").func is sizing_job_mod.pricing_and_sizing_scheduled
+    calls = []
+    monkeypatch.setattr(pricing_job_mod, "pricing_job", lambda now: calls.append(("pricing", now)))
+    monkeypatch.setattr(sizing_job_mod, "sizing_job", lambda now: calls.append(("sizing", now)))
+    sizing_job_mod.pricing_and_sizing_scheduled()
+    assert [c[0] for c in calls] == ["pricing", "sizing"] and calls[0][1] == calls[1][1]
+    assert not any("kelly" in s.id or "sizing" in s.id for s in job_specs())
