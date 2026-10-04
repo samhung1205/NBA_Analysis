@@ -34,6 +34,7 @@ from typing import Any, Callable, Iterator
 import joblib
 import sklearn
 
+from ..models import distributions as dist_mod
 from ..models import temporal_features as tf
 from ..timeutil import now_utc
 from . import spec
@@ -267,6 +268,9 @@ class LoadedArtifact:
     def calibrator(self, name: str) -> tf.InjuryCalibrator:
         return tf.InjuryCalibrator.from_state(self.profile(name)["calibrator"], frozen=True)
 
+    def distribution(self, name: str, target: str) -> dist_mod.FittedDistribution:
+        return dist_mod.FittedDistribution.from_state(self.profile(name)["distributions"][target]["state"])
+
 
 def read_history(root: str | Path | None = None) -> list[dict[str, Any]]:
     p = artifact_root(root) / "history.jsonl"
@@ -302,7 +306,8 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
         raise IncompatibleArtifactError(f"artifact 缺少欄位 {sorted(missing)}")
     if bundle["schema_version"] not in spec.SUPPORTED_SCHEMA_VERSIONS:
         raise IncompatibleArtifactError(
-            f"artifact schema_version={bundle['schema_version']}，程式只支援 {sorted(spec.SUPPORTED_SCHEMA_VERSIONS)}")
+            f"artifact schema_version={bundle['schema_version']}，程式只支援 {sorted(spec.SUPPORTED_SCHEMA_VERSIONS)}"
+            "（schema 1 = C.5D，沒有預測分佈；請重新訓練）")
     if bundle["feature_version"] != tf.FEATURE_VERSION:
         raise IncompatibleArtifactError(
             f"artifact 特徵版本 {bundle['feature_version']} ≠ 程式 {tf.FEATURE_VERSION}（需重新訓練）")
@@ -330,6 +335,22 @@ def validate_bundle(bundle: dict[str, Any]) -> None:
             tf.InjuryCalibrator.from_state(prof["calibrator"])
         except (KeyError, ValueError) as e:
             raise IncompatibleArtifactError(f"profile {name} 的傷病校準狀態不相容：{e}") from e
+        dists = prof.get("distributions")
+        if not isinstance(dists, dict):
+            raise IncompatibleArtifactError(f"profile {name} 缺少預測分佈（distributions）")
+        for target in spec.DISTRIBUTION_TARGETS:
+            dd = dists.get(target)
+            if not dd or "state" not in dd:
+                raise IncompatibleArtifactError(f"profile {name} 缺少 {target} 的預測分佈")
+            if dd.get("distribution_version") != spec.DISTRIBUTION_VERSION:
+                raise IncompatibleArtifactError(
+                    f"{name}/{target} 分佈版本 {dd.get('distribution_version')} ≠ 程式 {spec.DISTRIBUTION_VERSION}")
+            try:
+                d = dist_mod.FittedDistribution.from_state(dd["state"])
+            except (KeyError, ValueError, TypeError) as e:
+                raise IncompatibleArtifactError(f"{name}/{target} 預測分佈狀態不相容：{e}") from e
+            if d.target != target:
+                raise IncompatibleArtifactError(f"{name}/{target} 分佈的 target 是 {d.target}")
 
 
 def load_version(version: str, root: str | Path | None = None) -> LoadedArtifact:

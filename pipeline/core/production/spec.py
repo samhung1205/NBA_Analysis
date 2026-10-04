@@ -15,8 +15,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 MODEL_VERSION = "ml-v2.0"            # 寫入 predictions.model_version（C.5C 選定模型 + pregame-v2.1 特徵）
-ARTIFACT_SCHEMA_VERSION = 1          # artifact 檔案格式版本（loader 只接受 SUPPORTED_SCHEMA_VERSIONS）
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1})
+ARTIFACT_SCHEMA_VERSION = 2          # artifact 檔案格式版本（loader 只接受 SUPPORTED_SCHEMA_VERSIONS）
+SUPPORTED_SCHEMA_VERSIONS = frozenset({2})   # v1（C.5D，沒有預測分佈）一律拒絕，需重新訓練
 
 PRODUCTION_SPEC: dict[str, dict] = {
     "win":       {"family": "logistic", "group": "E",       "hp": 0.01,   "train_start": "2021-22"},
@@ -61,3 +61,24 @@ FEATURE_LABELS: dict[str, str] = {
     "games_7d_sum": "近7天場次和", "ret_min_pct_sum": "名單延續性和", "inj_n_out_sum": "傷病：Out 人數和",
     "exp_h1_blend_sum": "本季上半場期望得分和（含先驗）",
 }
+
+
+# ------------------------------------------------------------------ #
+# 預測分佈（C.5E；驗證賽季 2023-24 依預先規則選定，見 docs/phase-c5e-report.md）           #
+# ------------------------------------------------------------------ #
+DISTRIBUTION_VERSION = "dist-v2"
+DISTRIBUTION_TARGETS = ("margin", "total", "h1_margin", "h1_total")
+# location：分佈中心 = 點預測 + μ
+#   "zero"     μ = 0（production，自 2026-10-04 起凍結）。這是 **評測後的 production 修正**：
+#              預先登記的設定是 "oos_mean"（dist-v1）；C.5E 評測後的診斷發現 OOS 平均殘差每季翻號、造成系統偏差，
+#              使用者決定改為 μ = 0。2024-25 / 2025-26 上的改善**不是**確認性證據；2026-27 賽季是前瞻驗證期。
+#              σ = 以 0 為中心的 OOS 殘差均方根。
+#   "oos_mean" μ = 擬合集 OOS 殘差平均（C.5E 預先登記的原始設定，dist-v1；保留供重現與對照）
+DISTRIBUTION_SPEC: dict[str, dict] = {
+    "margin":    {"kind": "gaussian", "scaled": False, "lambda": None, "shared_profiles": True,  "location": "zero"},
+    "total":     {"kind": "gaussian", "scaled": False, "lambda": None, "shared_profiles": True,  "location": "zero"},
+    "h1_margin": {"kind": "gaussian", "scaled": False, "lambda": None, "shared_profiles": True,  "location": "zero"},
+    "h1_total":  {"kind": "gaussian", "scaled": False, "lambda": None, "shared_profiles": False, "location": "zero"},
+}
+LOCATION_FROZEN_AT = "2026-10-04"    # 之後不再依 2024-25 / 2025-26 調整；下一次檢視以 2026-27 實際結果為準
+MIN_DISTRIBUTION_FIT = 100           # 樣本外殘差少於此數 → 重訓失敗（不上線）

@@ -147,7 +147,7 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-10-03
+- **最後更新**：2026-10-04
 
 ## 階段二進度
 
@@ -156,6 +156,7 @@ npm run db:reset:local     # 重置本機資料庫
 - ✅ **Phase C.5B** 歷史資料完整度：五季 box score / 衍生進階指標 / 歷史傷病快照 / 賽前特徵底座（見下方「Phase C.5B」）
 - ✅ **Phase C.5C** 時間尺度特徵 + walk-forward 重新評估：勝負與分差/總分/上半場**全部**優於 Elo / baseline（見下方「Phase C.5C」）
 - ✅ **Phase C.5D** Production inference：C.5C 模型（ml-v2.0）版本化 artifact、每週重訓、未開賽比賽特徵、early / 開賽前 60 分鐘 / 傷病觸發預測排程（見下方「Phase C.5D」）。正式 DB 尚無 2026-27 賽程，開季前一天起由排程產生預測
+- ✅ **Phase C.5E** 預測分佈：分差 / 總分 / 上半場的任意盤口線機率（含 push），以 walk-forward 樣本外殘差擬合（見下方「Phase C.5E」）
 
 ### 尚未實作
 
@@ -180,7 +181,7 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. Phase C.5E（分差/總分機率分佈）→ 再進 Phase D
+4. Phase D（盤口與價值分析）
 
 ## 待與使用者確認的事項
 
@@ -297,11 +298,26 @@ python run_predict.py --kind refresh       # 最後一次預測後有新傷病�
 - `features_json` 新增 `artifact_version`、`training_cutoff_utc`、`prediction_kind`、`data_quality.flags`（`season_opener` / `low_sample` / `injury_unknown`…）、`target_contributions`（Ridge 精確線性分解，非 SHAP）；`contributions` 格式不變。
 - `elo_ratings` 表已過期（C.5B 修正比分後未重算），production 改用重播的 Elo（`core/models/elo_state.py`）。
 
+### Phase C.5E — Predictive distributions（2026-10）
+
+點預測 → 預測分佈 → 任意盤口線的 P(高於) / P(push) / P(低於)。詳見 [docs/phase-c5e-report.md](docs/phase-c5e-report.md)。
+
+- 分佈只用 **walk-forward 樣本外殘差**擬合（`core/production/oos.py`；不使用 full-fit 模型的 in-sample 殘差），每週隨重訓更新。
+- 選定（驗證賽季 2023-24 預先規則）：四個 target 皆全域高斯 + 連續性修正離散化；全場分差不會平手。情境尺度（季初 / 傷病未知 / 預測水準 / 季後賽）沒有樣本外改善 → 資料品質旗標只作 UI 警示。
+- 評測 2024-25 + 2025-26：80% / 95% 區間覆蓋 分差 79.5 / 93.3%、總分 79.8 / 94.8%；整數線 push 機率與實際相符。
+- artifact schema v2（`profiles.<p>.distributions.<target>`），舊 v1 artifact 會被拒絕（需 `python run_retrain.py`）。
+- 介面：`core/production/probability.py`（`predict_margin_probability` / `predict_total_probability` / … / `line_probability_from_prediction_row`）；不含 edge / EV。
+- `python -m core.jobs.c5e_evaluate` 重現評估（約 2.5 分鐘，不寫 DB）。
+- production 分佈中心 μ = 0（dist-v2）：**評測後的 production 修正**（預先登記的 μ = OOS 平均每季翻號、造成總分類約 2 個百分點偏差），2026-10-04 起凍結，**2026-27 賽季為前瞻驗證期**；原始結果保留在報告 §5–§9。
+- 獨贏（Phase D）：分差分佈導出的 P(主勝) 對邏輯迴歸勝率非劣（預先固定 δ，報告 §9b）→ 優先使用，邏輯迴歸作一致性監控。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase C.5E：分差 / 總分機率分佈
+### [下一步] Phase D：盤口與價值分析
 
-以 C.5C walk-forward 評測殘差擬合分佈（讓分/大小分機率），見 C.5D 報告 §15。
+edge 以 `core/production/probability.py` 計算（分佈 dist-v2、獨贏用分差導出機率）；不再依 2024-25 / 2025-26 調整模型。
+
+### [已完成] Phase C.5E：預測分佈（見上）
 
 ### [已完成] Phase C.5D：C.5C 模型的 production inference（見上）
 

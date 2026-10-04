@@ -33,9 +33,11 @@ import pandas as pd
 
 from ..models import elo_state
 from ..models import temporal_features as tf
+from ..models import distributions as dist
 from ..models import temporal_model as tm
 from ..timeutil import ensure_utc, now_utc, parse_utc
 from . import artifact as art_mod
+from . import distribution_fit
 from . import features as pf
 from . import spec
 from .inference import predict_profile
@@ -69,19 +71,8 @@ def data_fingerprint(history: pf.HistoryInputs) -> str:
 
 
 def training_frames(history: pf.HistoryInputs) -> dict[str, tuple[pd.DataFrame, Any]]:
-    """{profile: (含 y_{side}_* 的模型輸入表, walk-forward 傷病校準器)}；Phase C / Elo 與 profile 無關只算一次。"""
-    games_by_id = {g.game_id: g for g in history.games}
-    _, elo_before = elo_state.replay(history.games)
-    pc = pf.phase_c_frame(history, elo_before)
-    elo = pf.elo_frame(elo_before)
-    out = {}
-    for name, timing in spec.PROFILES.items():
-        v2, cal = tf.build_temporal_features(history.games, history.derived, history.players, history.injury_index,
-                                             timing=timing, return_calibrator=True)
-        tf.assert_no_leakage(v2)
-        frame = pf.side_targets(pf.model_frame(v2, pc, elo), games_by_id, history.derived)
-        out[name] = (frame, cal)
-    return out
+    """{profile: (含 y_{side}_* 的模型輸入表, walk-forward 傷病校準器)}（見 features.build_training_frames）。"""
+    return pf.build_training_frames(history)
 
 
 def _fit(family: str, X: pd.DataFrame, y: pd.Series, hp: float):
@@ -113,7 +104,10 @@ def train_bundle(history: pf.HistoryInputs, cutoff: datetime, *, trained_at: dat
         raise ValueError("沒有可訓練的比賽")
     profiles: dict[str, Any] = {}
     finals: dict[str, pd.DataFrame] = {}
-    for name, (frame, cal) in training_frames(history).items():
+    frames = training_frames(history)
+    # 預測分佈：只用 walk-forward 樣本外殘差（不用下面 full-fit 模型的 in-sample 殘差）
+    distributions, oos_df = distribution_fit.fit_all(history, frames)
+    for name, (frame, cal) in frames.items():
         params = tm.fit_all_blends(frame)
         fin, fills = tm.add_model_columns(tm.apply_blends(frame, params))
         models: dict[str, Any] = {}
@@ -131,7 +125,8 @@ def train_bundle(history: pf.HistoryInputs, cutoff: datetime, *, trained_at: dat
         profiles[name] = {"timing": spec.PROFILES[name],
                           "blend_params": {f"{m}|{mode}": asdict(bp) for (m, mode), bp in params.items()},
                           "fills": {k: float(v) for k, v in fills.items()},
-                          "calibrator": cal.to_state(), "models": models}
+                          "calibrator": cal.to_state(), "models": models,
+                          "distributions": distributions[name]}
         finals[name] = fin
     seasons = sorted({g.season for g in history.games})
     n_train = {t: profiles["final"]["models"][t]["n_train"] for t in spec.PRODUCTION_SPEC}
@@ -150,7 +145,14 @@ def train_bundle(history: pf.HistoryInputs, cutoff: datetime, *, trained_at: dat
                      "calibrator_n_obs": {p: profiles[p]["calibrator"]["n_obs"] for p in profiles},
                      "in_sample": {p: {t: profiles[p]["models"][t]["in_sample"] for t in spec.PRODUCTION_SPEC}
                                    for p in profiles},
-                     "elo": "replayed (models/elo_state; elo-v1.0 rules)"},
+                     "elo": "replayed (models/elo_state; elo-v1.0 rules)",
+                     "distributions": {"version": spec.DISTRIBUTION_VERSION, "spec": spec.DISTRIBUTION_SPEC,
+                                       "oos_rows": int(len(oos_df)),
+                                       "oos_seasons": sorted(oos_df["season"].unique().tolist()),
+                                       "sigma": {p: {t: distributions[p][t]["state"]["sigma"] for t in distributions[p]}
+                                                 for p in distributions},
+                                       "mu": {p: {t: distributions[p][t]["state"]["mu"] for t in distributions[p]}
+                                              for p in distributions}}},
     }
     return bundle, finals
 
@@ -176,6 +178,11 @@ def run_gates(bundle: dict[str, Any], finals: dict[str, pd.DataFrame]) -> dict[s
             c = ins[t]["mae"] < ins[t]["mae_const"]
             checks[f"{name}/{t}/mae<const"] = c
             ok &= c
+            st = prof["distributions"][t]["state"]
+            c = bool(np.isfinite(st["sigma"]) and 2.0 < st["sigma"] < 60.0 and np.isfinite(st["mu"])
+                     and st["n_fit"] >= spec.MIN_DISTRIBUTION_FIT)
+            checks[f"{name}/{t}/distribution_sane"] = c
+            ok &= c
     return {"passed": bool(ok), "checks": checks}
 
 
@@ -192,6 +199,11 @@ def roundtrip_verifier(bundle: dict[str, Any], finals: dict[str, pd.DataFrame]) 
                     raise RetrainGateFailed(f"存檔→載入後 {n}/{t} 預測不一致")
         for n in samples:
             tf.InjuryCalibrator.from_state(loaded["profiles"][n]["calibrator"])
+            for t in spec.DISTRIBUTION_TARGETS:
+                a = dist.FittedDistribution.from_state(bundle["profiles"][n]["distributions"][t]["state"])
+                b = dist.FittedDistribution.from_state(loaded["profiles"][n]["distributions"][t]["state"])
+                if dist.line_probabilities(a, 3.3, [-4.5, 0, 7]) != dist.line_probabilities(b, 3.3, [-4.5, 0, 7]):
+                    raise RetrainGateFailed(f"存檔→載入後 {n}/{t} 分佈機率不一致")
     return verify
 
 

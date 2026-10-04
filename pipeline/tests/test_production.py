@@ -185,9 +185,9 @@ def test_retrain_is_deterministic(league):
 
 
 def test_retrain_only_uses_games_before_cutoff_buffer(league, tmp_path):
-    cut = league.games[200].game_time_utc + timedelta(hours=2)        # 第 201 場開賽後 2 小時：未滿 buffer
+    cut = league.games[300].game_time_utc + timedelta(hours=2)        # 第 301 場開賽後 2 小時：未滿 buffer
     res = retrain.retrain(cut, root=tmp_path, history_loader=lambda limit: league)
-    assert res.n_games == 200
+    assert res.n_games == 300
     b = art_mod.load_current(tmp_path).bundle
     assert pf.ensure_utc(datetime.fromisoformat(b["metadata"]["last_game_utc"])) < cut - spec.TRAINING_GAME_BUFFER
     with pytest.raises(ValueError, match="cutoff"):

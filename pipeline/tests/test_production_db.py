@@ -21,7 +21,7 @@ API_LATEST_BATCH = """SELECT p.* FROM predictions p
 
 @pytest.fixture()
 def world(db, tmp_path):
-    league = synthetic_league(games_per_season=40)
+    league = synthetic_league(games_per_season=60)          # 60 場 / 季 → 每個 profile 120 筆 OOS 殘差（≥ MIN_DISTRIBUTION_FIT）
     tip = last_tip(league) + timedelta(days=1)
     sg = scheduled(9001, tip, 1, 2)
     other = scheduled(9002, tip + timedelta(hours=26), 3, 4)          # 36 小時視窗外（early 不會預測它）
@@ -157,3 +157,23 @@ def test_artifact_switch_produces_new_tracked_version(world):
     assert [r["features_json"]["artifact_version"] for r in rows] == [v1, v2]
     art_mod.rollback(root)
     assert art_mod.current_version(root) == v1
+
+
+def test_line_probability_from_stored_prediction_row(world):
+    """C.5E：API 讀到的那一列 → 以當時 artifact 版本重算任意盤口線機率（決定性）。"""
+    from core.production import probability
+    db, sg, tip, root = world["db"], world["sg"], world["tip"], world["root"]
+    predict.predict_upcoming_games_job("early", tip - timedelta(hours=20), root=root)
+    with db.cursor() as cur:
+        cur.execute(API_LATEST_ONE, (sg.game_id,))
+        row = cur.fetchone()
+    fj = row["features_json"]
+    assert set(fj["predictive_distributions"]) == set(spec.DISTRIBUTION_TARGETS)
+    lines = {"margin": [-4.5, 0, 3], "total": [round(row["pred_total"]) + 0.5, round(row["pred_total"])],
+             "h1_margin": [0, 1.5], "h1_total": [110.5, 111]}
+    for target, ls in lines.items():
+        for L in ls:
+            a = probability.line_probability_from_prediction_row(row, target, L, root=root)
+            b = probability.line_probability_from_prediction_row(row, target, L, root=root)
+            assert a == b and a["artifact_version"] == fj["artifact_version"]
+            assert a["probability_above"] + a["probability_push"] + a["probability_below"] == pytest.approx(1.0)

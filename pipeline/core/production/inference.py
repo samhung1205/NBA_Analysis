@@ -301,6 +301,8 @@ def _features_json(art, profile, kind, as_of, h, row, sg, q, expl, inputs, i, p,
                 "exp_starters_avail": _num(row.get(f"{side}_inj_exp_starters_avail"), 2)}
 
     gp_h, gp_a = int(row["home_gp"]), int(row["away_gp"])
+    dctx = {"min_gp": float(row["min_gp"]), "inj_both_known": float(row["inj_both_known"]),
+            "is_playoffs": float(row["is_playoffs"])}
     return {
         "model_version": art.model_version, "artifact_version": art.artifact_version,
         "feature_version": art.bundle["feature_version"], "training_cutoff_utc": art.training_cutoff_utc,
@@ -321,4 +323,25 @@ def _features_json(art, profile, kind, as_of, h, row, sg, q, expl, inputs, i, p,
         "data_quality": {"flags": q.flags, "details": q.details, "confidence_factor": round(q.factor, 4),
                          "prediction_allowed": True},
         "confidence_raw": round(conf_raw, 4),
+        "distribution_context": dctx,
+        "predictive_distributions": _distribution_summary(art, profile, reg, dctx),
     }
+
+
+def _distribution_summary(art, profile: str, reg: dict[str, float], dctx: dict[str, float]) -> dict[str, Any]:
+    """每個回歸 target 的預測分佈摘要（中心、尺度、80% / 95% 整數預測區間）；任意線的機率請用 probability 模組。"""
+    from ..models import distributions as dist
+    out = {}
+    for t in ("margin", "total", "h1_margin", "h1_total"):
+        dd = art.profile(profile)["distributions"][t]
+        d = dist.FittedDistribution.from_state(dd["state"])
+        c = None
+        if d.scale_model:
+            c = dist.context_features(np.array([reg[t]]), np.array([dctx["min_gp"]]),
+                                      np.array([dctx["inj_both_known"]]), np.array([dctx["is_playoffs"]]))
+        scale = float(d.scales(c, 1)[0])
+        out[t] = {"distribution": d.name, "distribution_version": dd["distribution_version"],
+                  "center": round(reg[t] + d.mu, 3), "scale": round(scale, 3),
+                  "interval_80": list(dist.central_interval(d, reg[t], 0.8, c)),
+                  "interval_95": list(dist.central_interval(d, reg[t], 0.95, c))}
+    return out

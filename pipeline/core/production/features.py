@@ -337,6 +337,23 @@ def elo_frame(elo_before: dict[int, tuple[float, float]]) -> pd.DataFrame:
     return pd.DataFrame([{"game_id": k, "elo_home": v[0], "elo_away": v[1]} for k, v in elo_before.items()])
 
 
+def build_training_frames(history: HistoryInputs) -> dict[str, tuple[pd.DataFrame, Any]]:
+    """{profile: (含 y_{side}_* 的模型輸入表, walk-forward 傷病校準器)}；Phase C / Elo 與 profile 無關只算一次。"""
+    from ..models import elo_state
+    from . import spec
+    games_by_id = {g.game_id: g for g in history.games}
+    _, elo_before = elo_state.replay(history.games)
+    pc = phase_c_frame(history, elo_before)
+    elo = elo_frame(elo_before)
+    out = {}
+    for name, timing in spec.PROFILES.items():
+        v2, cal = tf.build_temporal_features(history.games, history.derived, history.players, history.injury_index,
+                                             timing=timing, return_calibrator=True)
+        tf.assert_no_leakage(v2)
+        out[name] = (side_targets(model_frame(v2, pc, elo), games_by_id, history.derived), cal)
+    return out
+
+
 __all__ = ["HistoryInputs", "ScheduledGame", "PhaseCState", "phase_c_row", "model_frame", "side_targets",
            "finalize", "prepare_context", "upcoming_rows", "scheduled_prior_map", "phase_c_frame", "elo_frame",
            "PHASE_C_WIN_FEATURES"]
