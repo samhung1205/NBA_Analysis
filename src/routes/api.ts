@@ -16,7 +16,6 @@ import {
 } from '../lib/time'
 import { PRICING_VERSION, legacyEdges, shapePricing } from '../lib/pricing'
 import { RISK_POLICY_VERSION, attachSizing, shapeDaySizing } from '../lib/sizing'
-import { getCurrentUser } from '../lib/auth'
 
 type Env = { Bindings: AppBindings }
 
@@ -440,145 +439,10 @@ api.get('/odds/:gameId', async (c) => {
 })
 
 /* ------------------------------------------------------------------ */
-/* §3.3-10  /api/bets — 個人下單紀錄 CRUD（需登入）                      */
+/* §3.3-10  /api/bets — 個人下單紀錄（需登入）                             */
+/*   D.5 起移至 src/routes/decision.ts（provenance / risk-v1 檢查 / void / correction / 稽核紀錄）；  */
+/*   0008 未套用時該模組退回本階段以前的行為。                                                     */
 /* ------------------------------------------------------------------ */
-
-api.get('/bets', async (c) => {
-  const user = await getCurrentUser(c)
-  if (!user) return c.json({ error: 'unauthorized', message: '請先登入' }, 401)
-  const db = await getDb(c.env)
-  const rows = await q.getBets(db, user.uid)
-
-  // 績效統計（以台彩實際賠率計算，符合規格書 §6）
-  let staked = 0
-  let returned = 0
-  let win = 0
-  let lose = 0
-  let push = 0
-  let pending = 0
-  const curve: any[] = []
-  const settled = [...rows].reverse().filter((r) => r.result !== 'pending')
-  for (const r of rows) {
-    if (r.result === 'pending') pending++
-    else if (r.result === 'win') win++
-    else if (r.result === 'lose') lose++
-    else if (r.result === 'push' || r.result === 'void') push++
-  }
-  let cum = 0
-  for (const r of settled) {
-    staked += Number(r.stake) || 0
-    const payout = r.payout != null ? Number(r.payout) : r.result === 'win' ? Number(r.stake) * Number(r.odds) : r.result === 'push' || r.result === 'void' ? Number(r.stake) : 0
-    returned += payout
-    cum += payout - (Number(r.stake) || 0)
-    curve.push({ placed_at: r.placed_at, cumulative_pnl: Number(cum.toFixed(2)) })
-  }
-
-  return c.json({
-    bets: rows,
-    summary: {
-      total: rows.length,
-      win,
-      lose,
-      push,
-      pending,
-      hit_rate: win + lose > 0 ? win / (win + lose) : null,
-      total_staked: Number(staked.toFixed(2)),
-      total_returned: Number(returned.toFixed(2)),
-      pnl: Number((returned - staked).toFixed(2)),
-      roi: staked > 0 ? Number(((returned - staked) / staked).toFixed(4)) : null,
-    },
-    pnl_curve: curve,
-  })
-})
-
-api.post('/bets', async (c) => {
-  const user = await getCurrentUser(c)
-  if (!user) return c.json({ error: 'unauthorized', message: '請先登入' }, 401)
-  const db = await getDb(c.env)
-
-  let body: any
-  try {
-    body = await c.req.json()
-  } catch {
-    return c.json({ error: '無效的 JSON 請求內容' }, 400)
-  }
-
-  const gameId = Number(body.game_id)
-  const market = String(body.market ?? '')
-  const selection = String(body.selection ?? '')
-  const odds = Number(body.odds)
-  const stake = Number(body.stake)
-  const line = body.line === '' || body.line == null ? null : Number(body.line)
-
-  const validMarkets = ['ml', 'spread', 'total', 'h1_ml', 'h1_spread', 'h1_total']
-  const validSelections = ['home', 'away', 'over', 'under']
-  if (!Number.isInteger(gameId)) return c.json({ error: 'game_id 必填且須為整數' }, 400)
-  if (!validMarkets.includes(market))
-    return c.json({ error: `market 須為: ${validMarkets.join(', ')}` }, 400)
-  if (!validSelections.includes(selection))
-    return c.json({ error: `selection 須為: ${validSelections.join(', ')}` }, 400)
-  if (!(odds > 1)) return c.json({ error: 'odds 須為大於 1 的十進位賠率（台彩實際賠率）' }, 400)
-  if (!(stake > 0)) return c.json({ error: 'stake 須大於 0' }, 400)
-
-  const game = await q.getGameById(db, gameId)
-  if (!game) return c.json({ error: '找不到該場比賽' }, 404)
-
-  const isPg = db.driver === 'postgres'
-  const sql =
-    `INSERT INTO bets (user_id, game_id, market, selection, line, odds, stake, result, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)` + (isPg ? ' RETURNING id' : '')
-  const res = await db.run(sql, [
-    user.uid,
-    gameId,
-    market,
-    selection,
-    line,
-    odds,
-    stake,
-    body.note ? String(body.note) : null,
-  ])
-  return c.json({ ok: true, id: res.lastInsertId }, 201)
-})
-
-/** PATCH /api/bets/:id — 更新結算結果（個人手動結算，階段二可自動回寫） */
-api.patch('/bets/:id', async (c) => {
-  const user = await getCurrentUser(c)
-  if (!user) return c.json({ error: 'unauthorized' }, 401)
-  const db = await getDb(c.env)
-  const id = Number(c.req.param('id'))
-  const body = await c.req.json().catch(() => ({}))
-  const result = String((body as any).result ?? '')
-  if (!['pending', 'win', 'lose', 'push', 'void'].includes(result))
-    return c.json({ error: 'result 須為 pending/win/lose/push/void' }, 400)
-
-  const bet = await db.one<any>('SELECT * FROM bets WHERE id = ? AND user_id = ?', [id, user.uid])
-  if (!bet) return c.json({ error: '找不到該筆紀錄' }, 404)
-
-  const payout =
-    result === 'win'
-      ? Number(bet.stake) * Number(bet.odds)
-      : result === 'push' || result === 'void'
-        ? Number(bet.stake)
-        : result === 'lose'
-          ? 0
-          : null
-  await db.run('UPDATE bets SET result = ?, payout = ? WHERE id = ? AND user_id = ?', [
-    result,
-    payout,
-    id,
-    user.uid,
-  ])
-  return c.json({ ok: true, id, result, payout })
-})
-
-api.delete('/bets/:id', async (c) => {
-  const user = await getCurrentUser(c)
-  if (!user) return c.json({ error: 'unauthorized' }, 401)
-  const db = await getDb(c.env)
-  const id = Number(c.req.param('id'))
-  await db.run('DELETE FROM bets WHERE id = ? AND user_id = ?', [id, user.uid])
-  return c.json({ ok: true, id })
-})
 
 /* ------------------------------------------------------------------ */
 /* §3.3-11  GET /api/system/status — 各資料來源最後更新時間               */

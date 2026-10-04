@@ -53,6 +53,69 @@ pages.get('/', (c) => {
   )
 })
 
+/* ----------------------- D.5 今日決策中心 ----------------------- */
+
+pages.get('/decision', (c) => {
+  return c.render(
+    <section id="decision-page">
+      <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
+        <div>
+          <h1 class="text-lg font-bold mb-1">
+            <i class="fas fa-compass text-orange-400 mr-1.5"></i>今日決策中心
+          </h1>
+          <p class="text-xs text-slate-500">
+            台彩盤口 × 模型 × risk-v1（含已實際下注 exposure）· 平台不會自動下注；在台彩下注後回來按「記錄下注」
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs">
+            <button data-dday="0" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">今日</button>
+            <button data-dday="1" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">明日</button>
+          </div>
+          <input type="date" id="decision-date" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" />
+          <button id="decision-refresh" class="px-2 py-1.5 rounded border border-slate-700 text-xs text-slate-300 hover:bg-slate-800" title="重新整理">
+            <i class="fas fa-rotate"></i>
+          </button>
+        </div>
+      </div>
+      <div id="decision-banner"></div>
+      <div id="decision-summary" class="mb-4"></div>
+      <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">
+        <div id="decision-games" class="min-w-0"></div>
+        <aside class="space-y-4 min-w-0">
+          <div id="decision-evidence"></div>
+          <div id="decision-health"></div>
+        </aside>
+      </div>
+      <div id="record-modal-root"></div>
+    </section>,
+    { title: '今日決策中心', nav: 'decision', script: '/static/js/decision.js' }
+  )
+})
+
+/* ------------------------- D.5 資金（bankroll） ------------------------- */
+
+pages.get('/bankroll', (c) => {
+  return c.render(
+    <section id="bankroll-page">
+      <h1 class="text-lg font-bold mb-1">
+        <i class="fas fa-wallet text-orange-400 mr-1.5"></i>Strategy bankroll
+      </h1>
+      <p class="text-xs text-slate-500 mb-4">
+        手動維護的策略資金（不連銀行 / bookmaker）。所有異動皆為 append-only 紀錄；金額合計、未結算 stake、day-start 皆由 Python 計算。
+      </p>
+      <div id="bankroll-summary" class="mb-5"></div>
+      <div class="grid gap-5 lg:grid-cols-2">
+        <div id="bankroll-form"></div>
+        <div id="bankroll-performance"></div>
+      </div>
+      <div id="bankroll-days" class="mt-5"></div>
+      <div id="bankroll-ledger" class="mt-5"></div>
+    </section>,
+    { title: '資金', nav: 'bankroll', script: '/static/js/bankroll.js' }
+  )
+})
+
 /* ------------------------- 單場詳情頁 ------------------------- */
 
 pages.get('/games/:id', async (c) => {

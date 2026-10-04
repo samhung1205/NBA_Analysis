@@ -13,6 +13,7 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import type { AppBindings } from './db'
 import api from './routes/api'
+import decision from './routes/decision'
 import auth from './routes/auth'
 import pages from './pages/index'
 
@@ -25,6 +26,7 @@ app.use('/api/*', cors({ origin: '*', credentials: true }))
 app.get('/healthz', (c) => c.json({ ok: true, stage: 'stage-1', ts: new Date().toISOString() }))
 
 app.route('/api/auth', auth)
+app.route('/api', decision) // D.5：decision board / bets / bankroll（需登入）
 app.route('/api', api)
 app.route('/', pages)
 

@@ -55,6 +55,7 @@ def job_specs() -> list[JobSpec]:
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
     from .sizing.job import pricing_and_sizing_scheduled
     from .execution.ledger import paper_strategy_scheduled
+    from .decision.job import decision_board_scheduled
     from .config import settings
 
     return [
@@ -105,6 +106,11 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(minute="2-59/5", timezone=TPE),
                 "每 5 分鐘（:02/:07/…）：已到 T = 開賽 − 60 分、尚未決策的比賽 → 以 T 為 as-of 重建定價 / sizing → "
                 "記錄 decision（含 no_bet）與 paper bets（冪等、不重做；晚 > 15 分 → decision_window_missed）→ 結算已完賽的 paper bets"),
+        # ---- D.5：決策中心物化（actual bets 納入 risk-v1 額度；bankroll ledger；Node 只讀） ---- #
+        JobSpec("decision_board", decision_board_scheduled,
+                CronTrigger(minute="*", second=30, timezone=TPE),
+                "每分鐘（:30 秒）：實際注單 settle-v1 → bankroll ledger 損益同步 → 每位使用者 × betting day 的 "
+                "decision board（台彩 D.3 理論機會 − 實際下注 exposure → 新增額度；內容不變只更新確認時間）"),
     ]
 
 

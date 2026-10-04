@@ -19,6 +19,12 @@ export interface Db {
   one<T = any>(sql: string, params?: unknown[]): Promise<T | null>
   /** 執行寫入，回傳 lastInsertId（若可取得） */
   run(sql: string, params?: unknown[]): Promise<{ lastInsertId?: number | string }>
+  /**
+   * 多個寫入語句在同一個交易內執行（全部成功或全部失敗），回傳每個語句影響的列數。
+   * D1：batch()（SQLite 交易）；Postgres：BEGIN … COMMIT。
+   * D.5 的樂觀鎖（UPDATE … WHERE risk_state_version = ?）與後續 INSERT 一起送出，避免兩個請求同時用掉同一份額度。
+   */
+  atomic(steps: { sql: string; params?: unknown[] }[]): Promise<number[]>
   /** 目前使用的驅動名稱，供 /api/system/status 顯示 */
   readonly driver: 'postgres' | 'd1'
 }
@@ -45,6 +51,12 @@ class D1Db implements Db {
   async run(sql: string, params: unknown[] = []) {
     const res = await this.d1.prepare(sql).bind(...(params as any[])).run()
     return { lastInsertId: res.meta?.last_row_id }
+  }
+
+  async atomic(steps: { sql: string; params?: unknown[] }[]) {
+    const stmts = steps.map((s) => this.d1.prepare(s.sql).bind(...((s.params ?? []) as any[])))
+    const res = await this.d1.batch(stmts)
+    return res.map((r: any) => Number(r?.meta?.changes ?? 0))
   }
 }
 
@@ -78,6 +90,17 @@ class PostgresDb implements Db {
     const rows = await this.all<any>(rawSql, params)
     const first = rows?.[0]
     return { lastInsertId: first?.id }
+  }
+
+  async atomic(steps: { sql: string; params?: unknown[] }[]) {
+    return this.sql.begin(async (tx: any) => {
+      const counts: number[] = []
+      for (const s of steps) {
+        const r = await tx.unsafe(toPgPlaceholders(s.sql), (s.params ?? []) as any[])
+        counts.push(Number(r?.count ?? 0))
+      }
+      return counts
+    })
   }
 }
 

@@ -81,3 +81,47 @@ table.stat-table th {
   letter-spacing: 0.03em;
 }
 table.stat-table tbody tr:hover { background: rgba(30, 41, 59, 0.5); }
+
+/* ---------------- Phase D.5 決策中心（工具型、低飽和；狀態一律文字 + icon，不只靠顏色） ---------------- */
+.grp-badge {
+  display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.1rem 0.45rem; border-radius: 0.3rem;
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 0.03em; border: 1px solid transparent; white-space: nowrap;
+}
+.grp-actionable { color: #fdba74; background: rgba(249, 115, 22, 0.12); border-color: rgba(249, 115, 22, 0.35); }
+.grp-review { color: #fcd34d; background: rgba(245, 158, 11, 0.10); border-color: rgba(245, 158, 11, 0.30); border-style: dashed; }
+.grp-recorded { color: #7dd3fc; background: rgba(14, 165, 233, 0.10); border-color: rgba(14, 165, 233, 0.30); }
+.grp-blocked { color: #fca5a5; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.25); }
+.grp-inactive { color: #94a3b8; background: rgba(100, 116, 139, 0.10); border-color: rgba(100, 116, 139, 0.25); }
+.grp-diagnostic { color: #a5b4fc; background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.25); }
+
+.game-card { border: 1px solid #1e293b; background: rgba(15, 23, 42, 0.6); border-radius: 0.75rem; padding: 0.85rem 1rem; min-width: 0; }
+.opp-row { border-top: 1px solid #1e293b; padding: 0.45rem 0; }
+.opp-row:first-of-type { border-top: 0; }
+.opp-row[data-group="inactive"] { opacity: 0.7; }
+.opp-main {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) 3.2rem 3.6rem minmax(0, 1.4fr); gap: 0.5rem; align-items: center;
+}
+.opp-status { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+@media (min-width: 900px) {
+  .opp-main { grid-template-columns: minmax(0, 1.4fr) 3.4rem 3.8rem minmax(0, 1.3fr) minmax(0, 1.6fr); }
+  .opp-status { grid-column: auto; justify-content: flex-end; }
+}
+.record-btn {
+  font-size: 0.7rem; padding: 0.2rem 0.55rem; border-radius: 0.3rem; background: #f97316; color: white; font-weight: 600;
+}
+.record-btn:hover { background: #fb923c; }
+.opp-details > summary, details.intl > summary { cursor: pointer; font-size: 0.65rem; color: #64748b; margin-top: 0.25rem; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.25rem 0.75rem; margin-top: 0.35rem; }
+.detail-grid dt, .kv dt { font-size: 0.6rem; color: #64748b; }
+.detail-grid dd, .kv dd { font-size: 0.72rem; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.kv { display: grid; gap: 0.35rem; }
+.kv > div { display: flex; justify-content: space-between; gap: 0.75rem; }
+.kv dd { text-align: right; }
+.tw-missing { border: 1px dashed #334155; border-radius: 0.5rem; padding: 0.5rem 0.65rem; font-size: 0.75rem; color: #cbd5e1; margin-top: 0.35rem; }
+.panel { border: 1px solid #1e293b; background: rgba(15, 23, 42, 0.6); border-radius: 0.75rem; padding: 0.85rem 1rem; }
+.panel > h2 { font-size: 0.8rem; font-weight: 600; color: #cbd5e1; margin-bottom: 0.5rem; }
+.exposure-meter { height: 4px; background: #1e293b; border-radius: 2px; margin-top: 3px; overflow: hidden; }
+.exposure-meter > span { display: block; height: 100%; background: linear-gradient(90deg, #f97316, #ef4444); }
+.inp { width: 100%; margin-top: 0.25rem; background: #1e293b; border: 1px solid #334155; border-radius: 0.3rem; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.75); display: flex; align-items: flex-start; justify-content: center; padding: 3rem 1rem; z-index: 60; overflow-y: auto; }
+.modal-card { width: 100%; max-width: 30rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.75rem; padding: 1rem 1.1rem; }

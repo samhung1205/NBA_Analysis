@@ -8,10 +8,12 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
   const bodyScript = (props as any).script as string | undefined
 
   const navItems = [
+    { key: 'decision', href: '/decision', icon: 'fa-compass', label: '決策中心' },
     { key: 'games', href: '/', icon: 'fa-basketball', label: '賽事總覽' },
     { key: 'injuries', href: '/injuries', icon: 'fa-kit-medical', label: '傷病中心' },
     { key: 'performance', href: '/performance', icon: 'fa-chart-line', label: '回測 / 績效' },
     { key: 'bets', href: '/bets', icon: 'fa-receipt', label: '投注紀錄' },
+    { key: 'bankroll', href: '/bankroll', icon: 'fa-wallet', label: '資金' },
     { key: 'status', href: '/status', icon: 'fa-heart-pulse', label: '系統狀態' },
   ]
 

@@ -11,7 +11,7 @@
     "cf-typegen": "wrangler types --env-interface CloudflareBindings",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
     "test:api": "node scripts/smoke-test.mjs",
-    "db:migrate:local": "wrangler d1 execute webapp-production --local --file=./migrations/d1/0001_init.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0002_phase2.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0004_phase_d1.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0005_phase_d2.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0006_phase_d3.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0007_phase_d4.sql",
+    "db:migrate:local": "wrangler d1 execute webapp-production --local --file=./migrations/d1/0001_init.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0002_phase2.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0004_phase_d1.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0005_phase_d2.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0006_phase_d3.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0007_phase_d4.sql && wrangler d1 execute webapp-production --local --file=./migrations/d1/0008_phase_d5.sql",
     "db:seed:local": "node scripts/render-seed.mjs && wrangler d1 execute webapp-production --local --file=./seed/seed.generated.sql",
     "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed:local",
     "db:console:local": "wrangler d1 execute webapp-production --local --command",

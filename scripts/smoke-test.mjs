@@ -51,6 +51,8 @@ for (const [path, needle, label] of [
   ['/bets', 'bets-root', '投注紀錄'],
   ['/status', 'status-root', '系統狀態'],
   ['/login', 'auth-form', '登入頁'],
+  ['/decision', 'decision-games', '決策中心（D.5）'],
+  ['/bankroll', 'bankroll-summary', '資金（D.5）'],
 ]) {
   const r = await req(path)
   ok(`${label} ${path} 回應 200 且含掛載點`, r.status === 200 && String(r.body).includes(needle), `status=${r.status}`)
@@ -274,9 +276,23 @@ const created = await req('/api/bets', {
     line: -1.5, odds: 1.87, stake: 1000, note: 'smoke test',
   }),
 })
-ok('POST /api/bets 201 並回傳 id', created.status === 201 && created.body?.id != null,
+// D.5：新帳號沒有 bankroll → 風險額度無法驗證 → 需要明確確認（不拒絕事實、不自動縮小金額）
+ok('POST /api/bets（無 bankroll）先回 409 confirmation_required（missing_context）',
+  created.status === 409 && created.body?.error === 'confirmation_required' &&
+  created.body?.checks?.includes('bankroll_not_configured') && created.body?.compliance_if_confirmed === 'missing_context',
   JSON.stringify(created.body))
-const betId = created.body?.id
+const createdOk = await req('/api/bets', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    game_id: g0.id, market: 'spread', selection: 'home',
+    line: -1.5, odds: 1.87, stake: 1000, note: 'smoke test', confirm_override: true,
+  }),
+})
+ok('POST /api/bets 201 並回傳 id（明確確認後；compliance = missing_context）', createdOk.status === 201 && createdOk.body?.id != null &&
+  createdOk.body?.bet?.strategy_compliance === 'missing_context' && createdOk.body?.bet?.origin === 'manual_unlinked',
+  JSON.stringify(createdOk.body))
+const betId = createdOk.body?.id
 
 const invalidBet = await req('/api/bets', {
   method: 'POST',
@@ -315,9 +331,142 @@ ok('  ROI = 87%（1870/1000 - 1）', Math.abs((afterSettle.body?.summary?.roi ??
 ok('  pnl_curve 有資料點', afterSettle.body?.pnl_curve?.length >= 1)
 
 const deleted = await req(`/api/bets/${betId}`, { method: 'DELETE' })
-ok('DELETE /api/bets/:id 200', deleted.status === 200)
+ok('DELETE /api/bets/:id 200（D.5：改為作廢，不刪除）', deleted.status === 200 && deleted.body?.record_status === 'voided')
 const afterDel = await req('/api/bets')
-ok('  刪除後不再出現於清單', !afterDel.body?.bets?.some((b) => b.id === betId))
+ok('  作廢後不再出現於預設清單', !afterDel.body?.bets?.some((b) => b.id === betId))
+const withInactive = await req('/api/bets?include_inactive=1')
+ok('  include_inactive=1 仍可看到（稽核軌跡保留）', withInactive.body?.bets?.some((b) => b.id === betId && b.record_status === 'voided'))
+const betDetail = await req(`/api/bets/${betId}`)
+ok('  GET /api/bets/:id 含 bet_events（recorded → settled_manual → voided）',
+  ['recorded', 'settled_manual', 'voided'].every((t) => betDetail.body?.events?.some((e) => e.event_type === t)),
+  JSON.stringify(betDetail.body?.events?.map((e) => e.event_type)))
+const settleVoided = await req(`/api/bets/${betId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ result: 'lose' }) })
+ok('  已作廢紀錄不可再結算（409）', settleVoided.status === 409)
+
+/* ===================== D.5 bankroll（新帳號） ===================== */
+section('D.5 bankroll ledger（新帳號，append-only）')
+const post = (path, body) => req(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+ok('GET /api/bankroll 未設定 → not_configured', (await req('/api/bankroll')).body?.status === 'not_configured')
+ok('deposit 在 initial_funding 前 → 409', (await post('/api/bankroll/entries', { entry_type: 'deposit', amount: 100 })).status === 409)
+const fund = await post('/api/bankroll/entries', { entry_type: 'initial_funding', amount: 50000, currency: 'TWD' })
+ok('initial_funding 201（建立 bankroll）', fund.status === 201, JSON.stringify(fund.body))
+ok('第二次 initial_funding → 409', (await post('/api/bankroll/entries', { entry_type: 'initial_funding', amount: 1 })).status === 409)
+ok('deposit 負數 → 400（方向由類型決定）', (await post('/api/bankroll/entries', { entry_type: 'deposit', amount: -5 })).status === 400)
+ok('adjustment 無原因 → 400', (await post('/api/bankroll/entries', { entry_type: 'adjustment', amount: -5 })).status === 400)
+const dep = await post('/api/bankroll/entries', { entry_type: 'deposit', amount: 1000, client_request_id: 'smoke-dep-0001' })
+ok('deposit 201', dep.status === 201)
+ok('同一 client_request_id 重送 → replay（不重複入帳）',
+  (await post('/api/bankroll/entries', { entry_type: 'deposit', amount: 1000, client_request_id: 'smoke-dep-0001' })).body?.replay === true)
+const rev = await post('/api/bankroll/entries', { entry_type: 'reversal', reverses_entry_id: dep.body?.entry?.id, reason: 'smoke' })
+ok('reversal 201（沖銷，不修改原筆）', rev.status === 201)
+const br = await req('/api/bankroll')
+ok('GET /api/bankroll：ledger 3 筆（initial / deposit / reversal），尚待 Python 重新計算', br.body?.ledger?.length === 3 &&
+  br.body?.summary == null && br.body?.account?.currency === 'TWD', JSON.stringify(br.body?.ledger?.map((e) => e.entry_type)))
+ok('withdrawal 在 Python 物化前 → 409 recalculation_pending（不以過期餘額判斷）',
+  (await post('/api/bankroll/entries', { entry_type: 'withdrawal', amount: 10 })).body?.error === 'recalculation_pending')
+
+/* ===================== D.5 決策中心（demo 帳號，seed 物化） ===================== */
+section('D.5 決策中心 / 記錄下注（demo seed）')
+const otherUserBets = (await req('/api/bets?include_inactive=1')).body?.bets || []
+await req('/api/auth/logout', { method: 'POST' })
+cookie = ''
+ok('未登入 GET /api/decision-board → 401', (await req('/api/decision-board')).status === 401)
+ok('未登入 GET /api/bankroll → 401', (await req('/api/bankroll')).status === 401)
+ok('未登入 POST /api/bankroll/entries → 401', (await post('/api/bankroll/entries', { entry_type: 'deposit', amount: 1 })).status === 401)
+ok('未登入 POST /api/bets/1/void → 401', (await post('/api/bets/1/void', { reason: 'x' })).status === 401)
+await post('/api/auth/login', { email: 'demo@example.com', password: 'nba12345678' })
+const tomorrowDate = tomorrow.body?.tpe_date
+const board = await req(`/api/decision-board?date=${tomorrowDate}`)
+const B = board.body || {}
+ok('GET /api/decision-board?date=<明日> 200、已物化、risk_state current', board.status === 200 && B.materialized === true &&
+  B.risk_state?.status === 'current' && B.risk_state?.capacity_valid === true, JSON.stringify(B.risk_state))
+ok('  回傳 summary / games / actual_exposure / risk_limits / bankroll / evidence / system_health',
+  ['summary', 'games', 'actual_exposure', 'risk_limits', 'bankroll', 'evidence', 'system_health'].every((k) => B[k] != null))
+ok('  risk-v1 未修改（¼ Kelly / 2% / 3% / 8%）', B.risk_limits?.kelly_multiplier === 0.25 && B.risk_limits?.max_bet_fraction === 0.02 &&
+  B.risk_limits?.max_game_fraction === 0.03 && B.risk_limits?.max_day_fraction === 0.08 && B.risk_limits?.risk_policy_version === 'risk-v1')
+const X = B.actual_exposure || {}
+ok('  actual exposure = Python 物化（Σ bets stake = day_stake；3,000 / 100,000 = 3%）',
+  Math.abs((X.bets || []).reduce((a, b) => a + (b.counted ? b.stake : 0), 0) - X.day_stake) < 1e-9 &&
+  Math.abs(X.day_fraction - 0.03) < 1e-12 && Math.abs(X.remaining_day_fraction - 0.05) < 1e-12, JSON.stringify({ d: X.day_fraction, r: X.remaining_day_fraction }))
+ok('  legacy 注單計入且有警示', (X.bets || []).some((b) => b.legacy && b.counted) && (X.warnings || []).some((w) => w.includes('legacy_unlinked_bet')))
+ok('  bankroll：day-start 100,000、目前 100,000、未結算 stake 3,000', B.bankroll?.day_start_bankroll === 100000 &&
+  B.bankroll?.current_bankroll === 100000 && B.bankroll?.committed_open_stake === 3000)
+const allTw = (B.games || []).flatMap((g) => g.taiwan)
+const allIntl = (B.games || []).flatMap((g) => g.international)
+const qual = allTw.filter((o) => o.decision_status === 'qualified')
+ok('  有 qualified 台彩機會，capacity_valid 且建議金額 ≤ 最大新增額度', qual.length > 0 &&
+  qual.every((o) => o.capacity_valid && o.suggested_stake_amount <= o.max_additional_stake_amount + 1e-9 && o.ev_per_unit > 0))
+ok('  新增額度合計 ≤ 當日剩餘（Python 物化值）', qual.reduce((a, o) => a + o.user_adjusted_fraction, 0) <= X.remaining_day_fraction + 1e-12)
+ok('  每場新增額度 ≤ 同場剩餘', (B.games || []).every((g) => g.taiwan.filter((o) => o.decision_status === 'qualified')
+  .reduce((a, o) => a + o.user_adjusted_fraction, 0) <= (g.remaining_game_fraction ?? 0.03) + 1e-12))
+const recorded = allTw.filter((o) => o.decision_status === 'already_recorded')
+ok('  已實際下注的市場 → already_recorded、新增額度 0（不 top-up）', recorded.length > 0 &&
+  recorded.every((o) => o.user_adjusted_fraction === 0 && o.status_group === 'recorded' && o.capacity_valid === false))
+ok('  國際盤只作 diagnostic：沒有額度、標 international_market_diagnostic', allIntl.length > 0 &&
+  allIntl.every((o) => o.status_group === 'diagnostic' && o.max_additional_stake_amount == null &&
+    o.evidence_label === 'international_market_diagnostic' && o.capacity_valid === false))
+ok('  無 Python 端以外的 stake：TS 只傳遞物化值（qualified 金額 = 物化列）', qual.every((o) => typeof o.max_additional_stake_amount === 'number'))
+ok('  evidence：歷史投注證據 unavailable、bootstrap insufficient、prospective badge',
+  B.evidence?.historical_betting_evidence?.status === 'unavailable' && B.evidence?.prospective_paper?.bootstrap?.status === 'insufficient_sample' &&
+  B.evidence?.badge === 'prospective_validation' && B.evidence?.affects_strategy === false)
+ok('  system_health 含 台彩 / Odds API / 定價 / sizing / paper / 決策物化 / bankroll / exposure',
+  ['schedule', 'predictions', 'injuries', 'taiwan_odds', 'odds_api', 'pricing', 'sizing', 'paper_strategy', 'decision_board', 'bankroll',
+    'actual_exposure'].every((k) => B.system_health?.components?.some((c) => c.key === k)))
+const todayBoard = await req(`/api/decision-board?date=${today.body?.tpe_date}`)
+ok('今日（無物化）→ not_materialized、無任何有效額度', todayBoard.body?.materialized === false &&
+  todayBoard.body?.risk_state?.capacity_valid === false && (todayBoard.body?.games || []).every((g) => g.taiwan.length === 0))
+ok('GET /api/decision-board?date=abc → 400', (await req('/api/decision-board?date=abc')).status === 400)
+
+// 記錄下注：超出 risk-v1 → 需要明確確認 + 原因（不會默默截斷）
+const q0 = qual[0]
+const tooBig = await post('/api/bets', { decision_opportunity_id: q0.id, odds: q0.decimal_odds, stake: 999999 })
+ok('超出 risk-v1 → 409 confirmation_required（Exceeds risk-v1 limit、user_override、需原因）', tooBig.status === 409 &&
+  tooBig.body?.checks?.some((c) => c.startsWith('exceeds_risk_v1')) && tooBig.body?.compliance_if_confirmed === 'user_override' &&
+  tooBig.body?.requires_reason === true, JSON.stringify(tooBig.body))
+ok('  確認但未填原因 → 400', (await post('/api/bets', { decision_opportunity_id: q0.id, odds: q0.decimal_odds, stake: 999999,
+  confirm_override: true })).status === 400)
+const dup = await post('/api/bets', { decision_opportunity_id: recorded[0].id, odds: recorded[0].decimal_odds, stake: 10 })
+ok('已記錄的機會 → 409（already_recorded_no_top_up）', dup.status === 409 && dup.body?.checks?.includes('already_recorded_no_top_up'))
+const intlTry = await post('/api/bets', { decision_opportunity_id: allIntl[0].id, odds: 2, stake: 10 })
+ok('國際盤 diagnostic 不可當平台機會記錄 → 400', intlTry.status === 400)
+
+// 兩個分頁同時記錄（同一份剩餘額度）→ 只有一筆成功
+const q1 = qual.find((o) => o.id !== q0.id) || q0
+const stakeA = Math.floor(q0.suggested_stake_amount)
+const [ra, rb] = await Promise.all([
+  post('/api/bets', { decision_opportunity_id: q0.id, odds: q0.decimal_odds - 0.03, stake: stakeA, client_request_id: 'smoke-tab-a-001' }),
+  post('/api/bets', { decision_opportunity_id: q1.id, odds: q1.decimal_odds, stake: Math.floor(q1.suggested_stake_amount), client_request_id: 'smoke-tab-b-001' }),
+])
+const codes = [ra.status, rb.status].sort()
+ok('兩個同時送出 → 一筆 201、一筆 409（不會兩筆都用掉同一份額度）', codes[0] === 201 && codes[1] === 409,
+  JSON.stringify([ra.status, ra.body?.error, rb.status, rb.body?.error]))
+const won = ra.status === 201 ? ra : rb
+const wonReq = ra.status === 201 ? 'smoke-tab-a-001' : 'smoke-tab-b-001'
+ok('  成功的一筆：platform_opportunity / compliant / 保存參考賠率與實際賠率', won.body?.bet?.origin === 'platform_opportunity' &&
+  won.body?.bet?.strategy_compliance === 'compliant' && won.body?.bet?.reference_decimal_odds != null && won.body?.bet?.odds != null &&
+  won.body?.bet?.reference_odds_snapshot_id != null && won.body?.bet?.decision_opportunity_id != null, JSON.stringify(won.body?.bet))
+if (ra.status === 201) ok('  實際賠率 ≠ 平台觀察賠率時兩者都保存', Math.abs(won.body.bet.odds - won.body.bet.reference_decimal_odds) > 0.01)
+const replayed = await post('/api/bets', { decision_opportunity_id: q0.id, odds: q0.decimal_odds, stake: 1, client_request_id: wonReq })
+ok('  同一 client_request_id 重送 → replay，不重複建立', replayed.status === 200 && replayed.body?.replay === true && replayed.body?.id === won.body?.id)
+const after = (await req(`/api/decision-board?date=${tomorrowDate}`)).body
+ok('記錄後決策中心 → risk_recalculation_pending，所有額度暫不有效', after?.risk_state?.status === 'recalculation_pending' &&
+  (after?.games || []).flatMap((g) => g.taiwan).every((o) => o.capacity_valid === false))
+const third = await post('/api/bets', { decision_opportunity_id: q1.id, odds: q1.decimal_odds, stake: 10 })
+ok('重新計算前再記錄 → 409 confirmation_required（risk_recalculation_pending → missing_context）', third.status === 409 &&
+  third.body?.checks?.includes('risk_recalculation_pending') && third.body?.compliance_if_confirmed === 'missing_context')
+const demoBets = (await req('/api/bets')).body
+ok('GET /api/bets：含 legacy 注單（origin null）與 provenance 欄位', demoBets?.d5_schema === true &&
+  demoBets?.bets?.some((b) => b.legacy === true) && demoBets?.bets?.some((b) => b.origin === 'platform_opportunity'))
+ok('  actual_performance（Python 物化）標示 User actual betting record',
+  demoBets?.actual_performance?.label === 'user_actual_betting_record')
+ok('  其他使用者的注單看不到 / 改不到', !(demoBets?.bets || []).some((b) => otherUserBets.some((o) => o.id === b.id)) &&
+  (await req(`/api/bets/${otherUserBets[0]?.id ?? 999999}`)).status === 404)
+const corr = await post(`/api/bets/${won.body?.id}/correction`, { stake: stakeA - 1, reason: 'smoke typo' })
+ok('更正 → 新紀錄 supersedes 舊紀錄（舊紀錄不覆寫）', corr.status === 201 && corr.body?.supersedes_bet_id === won.body?.id &&
+  corr.body?.bet?.strategy_compliance === won.body?.bet?.strategy_compliance)
+const oldAfter = (await req(`/api/bets/${won.body?.id}`)).body?.bet
+ok('  舊紀錄 record_status = superseded、stake 不變', oldAfter?.record_status === 'superseded' && oldAfter?.stake === won.body?.bet?.stake)
 
 // 登出
 const logout = await req('/api/auth/logout', { method: 'POST' })

@@ -6,18 +6,20 @@
 - **目標**：每日分析隔天 NBA 對戰，輸出「全場勝負、讓分、大小分、上/下半場表現」預測與信心度，並與台灣運彩盤口比對，輔助個人投注決策。
 - **程式碼倉庫**：https://github.com/samhung1205/NBA_Analysis
 - **本階段範圍**：規格書 v2.0 **階段一** — 用 Hono + Cloudflare Pages 完成可登入、能讀寫資料庫、UI 齊全的網站骨架。資料為 seed 測試資料，但**讀取路徑全部走真實 API + 資料庫**。
-- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）、D.3（qualification / Kelly sizing / 風險上限）、D.4（策略執行 / 結算 / paper ledger；**目前沒有任何歷史投注績效證據**）已實作，D.5 尚未。
+- **階段二**（進行中，見文末「階段二（pipeline/）狀態」）：Python 資料擷取、排程與 ML 預測引擎；Phase A~C、D.1（盤口擷取）、D.2（去水 / edge / EV）、D.3（qualification / Kelly sizing / 風險上限）、D.4（策略執行 / 結算 / paper ledger；**目前沒有任何歷史投注績效證據**）、D.5（決策中心 / 實際下注納入 risk-v1 exposure / strategy bankroll）已實作。Phase D 結束。
 
 ## 目前完成的功能
 
 ### 前端頁面（§3.4）
 | 頁面 | 路徑 | 內容 |
 |---|---|---|
+| **今日決策中心**（D.5） | `/decision` | 台彩機會 × risk-v1（含已實際下注 exposure）× bankroll：ACTIONABLE / REVIEW / RECORDED / BLOCKED、記錄下注、Evidence、System readiness（需登入） |
+| 資金（D.5） | `/bankroll` | 手動 strategy bankroll：append-only ledger、day-start 凍結、User actual betting record（需登入） |
 | 賽事總覽 | `/` | 每場卡片：對戰、台灣時間、模型勝率、預測分差/總分、上半場預測、台彩 vs 國際盤 vs 模型、Edge 標示；可切換 今日/明日/後天 或任選日期 |
 | 單場詳情 | `/games/:id` | 盤口定價（每個 bookmaker / outcome：原始隱含、去水公允、模型、push、edge、EV；D.2）、逐節/半場表格、**特徵拆解（為什麼這樣預測）**、盤口變動折線圖、本場傷病、球隊數據、雙方近況、H2H |
 | 傷病中心 | `/injuries` | 依球隊分組的官方傷病申報 + **主力缺陣警示**（警示球隊排序在前）；可切換今日/明日 |
 | 回測 / 績效 | `/performance` | 模型歷史準確率、ATS、大小分、上半場命中率、Log Loss/Brier、模擬 ROI；個人實際投注損益曲線 |
-| 投注紀錄 | `/bets` | 個人下單 CRUD、手動結算、命中率/損益/ROI 統計 |
+| 投注紀錄 | `/bets` | 實際下注紀錄（手動記錄需確認流程）、作廢 / 更正（不刪除）、策略合規標示、手動結算 |
 | 系統狀態 | `/status` | 各資料來源最後更新時間、新鮮度、失敗告警；每分鐘自動刷新 |
 | 登入 / 註冊 | `/login` | email + password |
 
@@ -34,7 +36,9 @@
 | 7 | `GET /api/injuries/today?date=` | 當日各隊傷病報告（含主力缺陣警示） |
 | 8 | `GET /api/predictions/:gameId` | 該場最新預測 |
 | 9 | `GET /api/odds/:gameId` | 盤口快照歷史 + 已分組時間序列（供折線圖） |
-| 10 | `GET /api/bets`、`POST /api/bets`、`PATCH /api/bets/:id`、`DELETE /api/bets/:id` | 個人下單紀錄 CRUD（**需登入**） |
+| 10 | `GET /api/bets`、`POST /api/bets`、`PATCH /api/bets/:id`、`POST /api/bets/:id/void`、`POST /api/bets/:id/correction`、`DELETE /api/bets/:id`（= void） | 實際下注紀錄（**需登入**；D.5 provenance / risk-v1 檢查 / 稽核） |
+| — | `GET /api/decision-board?date=` | D.5 決策中心（Python 物化；需登入） |
+| — | `GET /api/bankroll`、`POST /api/bankroll/entries` | D.5 strategy bankroll（需登入） |
 | 11 | `GET /api/system/status` | 各資料來源最後更新時間與健康度 |
 | — | `GET /api/metrics` | 模型回測績效 |
 | — | `GET /api/teams` | 球隊清單 |
@@ -148,7 +152,7 @@ npm run db:reset:local     # 重置本機資料庫
 - **平台**：Cloudflare Pages
 - **狀態**：Supabase Postgres 已就緒並通過驗收；尚未執行 `wrangler pages deploy`
 - **技術棧**：Hono + TypeScript + TailwindCSS(CDN) + Chart.js(CDN) + Cloudflare Pages
-- **最後更新**：2026-10-04（Phase D.2）
+- **最後更新**：2026-10-05（Phase D.5）
 
 ## 階段二進度
 
@@ -166,7 +170,6 @@ npm run db:reset:local     # 重置本機資料庫
 
 ### 尚未實作
 
-- **Phase D.5** 實際下注 exposure / bankroll sync / 推薦清單
 - **Phase E** 強化（選做）：球員層級模型、line movement 特徵、Telegram/LINE 推播
 
 ### 階段一已為階段二預留的接口
@@ -189,7 +192,7 @@ npm run db:reset:local     # 重置本機資料庫
 1. 部署 Cloudflare Pages 並驗證線上環境（Supabase Postgres 已就緒）
 2. 將 `pipeline/scheduler.py` 部署到未被 stats.nba.com 封鎖的主機（Railway/Fly；Dockerfile 已含 Java）
 3. 部署排程器時保留 `pipeline/artifacts/production/`（或部署後先跑 `python run_retrain.py`），開季第一週觀察 `/status` 的 `model_predict`
-4. 套用 `0007_phase_d4.sql`（`npm run db:migrate:pg`；0004–0006 與 `ODDS_API_KEY` 已完成），排程器的 `paper_strategy` 才會開始記錄 2026-27 的 T-60 paper decision
+4. 套用 `0008_phase_d5.sql`（`npm run db:migrate:pg`；0001–0007 已套用），再部署排程器（含 `decision_board`）與 API
 
 ## 待與使用者確認的事項
 
@@ -395,11 +398,28 @@ python run_paper.py --report           # prospective paper performance
 - **Evidence**：odds 列分 observed / seed / synthetic / unverified；歷史引擎只用 observed，沒有 → `historical_evidence_available = false`（不輸出 ROI = 0）；Odds API 結果一律 `international_market_diagnostic`。正式 DB 2024-25 / 2025-26：盤口 0 筆 → 無歷史投注證據。
 - **Paper ledger**：`migrations/postgres/0007_phase_d4.sql`（`paper_strategy_days` / `_decisions` / `_bets`；不可變 trigger；**正式 DB 尚未套用**）。排程 `paper_strategy` 每 5 分鐘（:02/:07/…）。
 
+### Phase D.5 — Decision dashboard, bets-aware exposure & production readiness（2026-10）
+
+把使用者**真的已下注**的 bets 納入同一個 risk-v1 預算（不改 risk-v1），提供每日決策中心、記錄下注流程、strategy bankroll 與 readiness。詳見 [docs/phase-d5-report.md](docs/phase-d5-report.md)。
+
+```bash
+cd pipeline
+python run_decision.py --dry-run --summary     # 實際注單結算 / ledger / 決策檢視（不寫入）
+python run_decision.py                         # 寫入（排程 decision_board 每分鐘自動執行）
+```
+
+- **三個概念分開**：model opportunity（`decision_opportunities`，台彩）／paper decision（D.4，只對照）／actual bet（`bets`，使用者手動記錄；平台從不自動下注）。
+- **decision-v1**：台彩-only D.3 `single_bet_capped_fraction` → 同場剩餘 max(0, 3% − 實際) → 當日剩餘 max(0, 8% − 實際) → 等比例縮放；分母 = 當日凍結的 day_start_bankroll；已記錄的 game × market 不 top-up；無最低 EV 門檻；國際盤只作 diagnostic。
+- **Override**：超出額度 / 重複 / 無法驗證 → 409 明確確認（+ 原因），記錄 `user_override` / `missing_context` / `outside_model`；從不自動截斷金額。
+- **稽核**：bets 執行欄位不可改、不可刪（void / correction）；`bet_events`、append-only `bankroll_ledger`、凍結 `bankroll_day_snapshots`；`risk_state_claims` 防止兩個分頁同時用掉同一份額度。
+- **Migration**：`0008_phase_d5.sql`（**正式 DB 尚未套用**；部署順序：`npm run db:migrate:pg` → 部署排程器 → 部署 API）。未套用時 bets API 退回 D.5 以前行為、決策中心回 unavailable。
+- 所有 exposure / 額度 / bankroll 數學只在 Python（`pipeline/core/decision/`）；TS / JS 只讀與比較（掃描測試）。
+
 ## 路線圖 / 保留待辦
 
-### [下一步] Phase D.5
+### [已完成] Phase D.5：決策中心 / actual-bet exposure / bankroll（見上）
 
-實際下注紀錄（`bets`）的 exposure 計入同場 / 單日上限、bankroll sync、介面；paper ledger 與實際下注必須分開。前提：0007 套用、排程器部署、2026-27 prospective ledger 開始累積（台彩快照取得方式仍是瓶頸）。
+Phase D 結束；下一步是部署（見 docs/phase-d5-report.md §21 deployment checklist）與 2026-27 prospective 資料累積，不延伸新策略。
 
 ### [已完成] Phase D.4：策略執行 / 結算 / paper ledger（見上）
 
