@@ -1,0 +1,6 @@
+{
+ "artifact_version": "ml-v2.0+20261004T0339Z.20261004T033948Z",
+ "promoted_at": "2026-10-04T03:39:59.406178+00:00",
+ "previous": "ml-v2.0+20261004T0306Z.20261004T030631Z",
+ "reason": "retrain"
+}

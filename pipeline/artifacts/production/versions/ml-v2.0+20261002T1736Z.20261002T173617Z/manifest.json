@@ -1,0 +1,155 @@
+{
+ "schema_version": 1,
+ "model_version": "ml-v2.0",
+ "artifact_version": "ml-v2.0+20261002T1736Z.20261002T173617Z",
+ "feature_version": "pregame-v2.1",
+ "training_cutoff_utc": "2026-10-02T17:36:02.695652+00:00",
+ "training_seasons": [
+  "2021-22",
+  "2022-23",
+  "2023-24",
+  "2024-25",
+  "2025-26"
+ ],
+ "trained_at_utc": "2026-10-02T17:36:17.925160+00:00",
+ "library_versions": {
+  "sklearn": "1.9.1",
+  "numpy": "2.4.6",
+  "pandas": "2.3.3",
+  "joblib": "1.6.0",
+  "python": "3.11.4"
+ },
+ "spec": {
+  "win": {
+   "family": "logistic",
+   "group": "E",
+   "hp": 0.01,
+   "train_start": "2021-22"
+  },
+  "margin": {
+   "family": "ridge",
+   "group": "E",
+   "hp": 1000.0,
+   "train_start": "2021-22"
+  },
+  "total": {
+   "family": "ridge",
+   "group": "E_count",
+   "hp": 1.0,
+   "train_start": "2021-22"
+  },
+  "h1_margin": {
+   "family": "ridge",
+   "group": "E_count",
+   "hp": 1000.0,
+   "train_start": "2021-22"
+  },
+  "h1_total": {
+   "family": "ridge",
+   "group": "E_count",
+   "hp": 1.0,
+   "train_start": "2021-22"
+  }
+ },
+ "sha256": "2ed38b471e45342d4fd6d3b7055f04806b4173097e10e378797c2d9359df67ac",
+ "bundle_file": "bundle.joblib",
+ "gates": {
+  "passed": true,
+  "checks": {
+   "early/win/finite": true,
+   "early/margin/finite": true,
+   "early/total/finite": true,
+   "early/h1_margin/finite": true,
+   "early/h1_total/finite": true,
+   "early/win/log_loss<ln2": true,
+   "early/margin/mae<const": true,
+   "early/total/mae<const": true,
+   "early/h1_margin/mae<const": true,
+   "early/h1_total/mae<const": true,
+   "final/win/finite": true,
+   "final/margin/finite": true,
+   "final/total/finite": true,
+   "final/h1_margin/finite": true,
+   "final/h1_total/finite": true,
+   "final/win/log_loss<ln2": true,
+   "final/margin/mae<const": true,
+   "final/total/mae<const": true,
+   "final/h1_margin/mae<const": true,
+   "final/h1_total/mae<const": true
+  }
+ },
+ "known_good": true,
+ "metadata": {
+  "n_games_history": 6605,
+  "n_train": {
+   "win": 6575,
+   "margin": 6575,
+   "total": 6575,
+   "h1_margin": 6575,
+   "h1_total": 6575
+  },
+  "last_game_utc": "2026-06-14T00:30:00+00:00",
+  "n_injury_reports": 9382,
+  "data_fingerprint": "44ccce882cbcfbcf",
+  "training_game_buffer_hours": 4.0,
+  "calibrator_n_obs": {
+   "early": 125272,
+   "final": 157334
+  },
+  "in_sample": {
+   "early": {
+    "win": {
+     "log_loss": 0.6095711394458084,
+     "brier": 0.21104639657599727
+    },
+    "margin": {
+     "mae": 10.84280154909128,
+     "mae_const": 12.297690306351111
+    },
+    "total": {
+     "mae": 14.694051012012865,
+     "mae_const": 16.105127973514143
+    },
+    "h1_margin": {
+     "mae": 8.820065365329784,
+     "mae_const": 9.38033387211034
+    },
+    "h1_total": {
+     "mae": 9.727421226134577,
+     "mae_const": 10.287311830444274
+    }
+   },
+   "final": {
+    "win": {
+     "log_loss": 0.6054381790840353,
+     "brier": 0.20934419858417685
+    },
+    "margin": {
+     "mae": 10.766408508509606,
+     "mae_const": 12.297690306351111
+    },
+    "total": {
+     "mae": 14.689407760857241,
+     "mae_const": 16.105127973514143
+    },
+    "h1_margin": {
+     "mae": 8.808042591649329,
+     "mae_const": 9.38033387211034
+    },
+    "h1_total": {
+     "mae": 9.727969520996737,
+     "mae_const": 10.287311830444274
+    }
+   }
+  },
+  "elo": "replayed (models/elo_state; elo-v1.0 rules)"
+ },
+ "profiles": {
+  "early": {
+   "timing": "early"
+  },
+  "final": {
+   "timing": "T-60"
+  }
+ }
+}
