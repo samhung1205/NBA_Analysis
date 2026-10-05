@@ -112,6 +112,7 @@ export type AppBindings = {
   DB?: D1Database
   DATABASE_URL?: string
   SESSION_SECRET?: string
+  ALLOW_REGISTRATION?: string
 }
 
 export async function getDb(env: AppBindings): Promise<Db> {

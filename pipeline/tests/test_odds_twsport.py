@@ -2,6 +2,7 @@
 import base64
 import copy
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -227,6 +228,36 @@ def test_har_import_uses_latest_response_time():
     assert len(res.events) == 2 and res.n_snapshots == 6
     with pytest.raises(ParserChanged):
         twsport.raw_from_har({"log": {"entries": []}})
+
+
+def _har_entry(ctype, cid, t, body, *, time_ms=None):
+    e = {"startedDateTime": t,
+         "request": {"url": "https://www-talo-ssb-pr.sportslottery.com.tw/services/content/get",
+                     "postData": {"text": json.dumps({"contentId": {"type": ctype, "id": cid}})}},
+         "response": {"status": 200, "content": {"text": json.dumps(body, ensure_ascii=False)}}}
+    if time_ms is not None:
+        e["time"] = time_ms
+    return e
+
+
+def test_har_fetched_at_is_response_completion_not_import_time():
+    """as-of 語意：fetched_at = startedDateTime + time（回應完成），不是匯入當下；T-60 之後擷取的資料不能被當成 T 之前就有。"""
+    eg = raw_fixture()["tournaments"][2]["event_groups"][0]
+    har = {"log": {"entries": [_har_entry("eventGroup", "63733.1", "2026-10-04T04:40:00.000Z", eg, time_ms=2500)]}}
+    now = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)      # 匯入發生在隔天
+    _, fetched_at = twsport.raw_from_har(har, now=now)
+    assert fetched_at.isoformat() == "2026-10-04T04:40:02.500000+00:00"
+    # time 缺漏 / -1 → 退回 startedDateTime
+    for tm in (None, -1):
+        har = {"log": {"entries": [_har_entry("eventGroup", "63733.1", "2026-10-04T04:40:00.000Z", eg, time_ms=tm)]}}
+        assert twsport.raw_from_har(har, now=now)[1].isoformat() == "2026-10-04T04:40:00+00:00"
+
+
+def test_har_with_future_timestamp_rejected():
+    eg = raw_fixture()["tournaments"][2]["event_groups"][0]
+    har = {"log": {"entries": [_har_entry("eventGroup", "63733.1", "2026-10-04T04:40:00.000Z", eg)]}}
+    with pytest.raises(ParserChanged):
+        twsport.raw_from_har(har, now=datetime(2026, 10, 4, 4, 0, tzinfo=timezone.utc))
 
 
 def test_challenge_title_detection():

@@ -9,13 +9,35 @@
 
 import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
-import type { Db } from '../db'
+import type { AppBindings, Db } from '../db'
 
 const PBKDF2_ITERATIONS = 210_000
 const SESSION_COOKIE = 'nba_session'
 const SESSION_TTL_SEC = 60 * 60 * 24 * 14 // 14 天
 
 const enc = new TextEncoder()
+
+const DEV_SECRET = 'dev-insecure-secret-change-me'
+const MIN_SECRET_LEN = 32
+
+/**
+ * Session 簽章金鑰。
+ * 正式環境（已設 DATABASE_URL = 使用 Postgres）必須有真正的隨機 SESSION_SECRET：
+ * 缺少、長度不足或等於開發預設值 → 丟錯（fail closed），避免任何人用公開的預設值偽造登入 cookie。
+ * 沙盒（D1）仍沿用開發預設值，維持本機開發與 smoke test 的行為。
+ */
+export function resolveSessionSecret(env: Pick<AppBindings, 'SESSION_SECRET' | 'DATABASE_URL'> | undefined): string {
+  const secret = env?.SESSION_SECRET
+  if (env?.DATABASE_URL) {
+    if (!secret || secret === DEV_SECRET || secret.length < MIN_SECRET_LEN) {
+      throw new Error(
+        `SESSION_SECRET 未設定或過弱：正式環境需要至少 ${MIN_SECRET_LEN} 字元的隨機字串（openssl rand -base64 32）`
+      )
+    }
+    return secret
+  }
+  return secret || DEV_SECRET
+}
 
 function b64encode(buf: ArrayBuffer | Uint8Array): string {
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf)
@@ -29,6 +51,14 @@ function b64decode(str: string): Uint8Array {
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
+}
+
+/**
+ * 是否允許註冊：沙盒（D1）一律允許；正式環境（Postgres）只有「還沒有任何使用者」或明確 ALLOW_REGISTRATION=true 才允許。
+ */
+export function registrationAllowed(driver: 'postgres' | 'd1', allowFlag: string | undefined, userCount: number): boolean {
+  if (driver !== 'postgres') return true
+  return allowFlag === 'true' || userCount === 0
 }
 
 /* ----------------------------- 密碼雜湊 ----------------------------- */
@@ -137,9 +167,9 @@ export function clearSessionCookie(c: Context) {
 export async function getCurrentUser(
   c: Context
 ): Promise<{ uid: number; email: string } | null> {
-  const secret = (c.env as any)?.SESSION_SECRET || 'dev-insecure-secret-change-me'
   const token = getCookie(c, SESSION_COOKIE)
   if (!token) return null
+  const secret = resolveSessionSecret(c.env as any)
   const payload = await readSessionToken(secret, token)
   return payload ? { uid: payload.uid, email: payload.email } : null
 }

@@ -30,7 +30,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..timeutil import ensure_utc
@@ -398,9 +398,22 @@ def parse_raw(raw: dict) -> ParseResult:
 # 手動擷取匯入（合規備援）：一般瀏覽器 DevTools → Network → Save all as HAR    #
 # ------------------------------------------------------------------ #
 
-def raw_from_har(har: dict) -> tuple[dict, datetime]:
+def _response_done_at(entry: dict) -> datetime:
+    """該筆 HAR 回應「收到完成」的時間 = startedDateTime + time（ms）。
+    HAR 的 startedDateTime 是請求「開始」時間；內容是在這之後才產生 / 收到，
+    用開始時間會宣稱比實際更早看到資料（對 T-60 的 as-of 不保守）。time 缺漏或為 -1 → 只用 startedDateTime。"""
+    t = ensure_utc(datetime.fromisoformat(str(entry["startedDateTime"]).replace("Z", "+00:00")))
+    try:
+        ms = float(entry.get("time"))
+    except (TypeError, ValueError):
+        ms = 0.0
+    return t + timedelta(milliseconds=ms) if ms > 0 else t
+
+
+def raw_from_har(har: dict, *, now: datetime | None = None) -> tuple[dict, datetime]:
     """把使用者以一般瀏覽器瀏覽台彩 NBA 頁面時匯出的 HAR 轉成 parser 的 raw。
-    回傳 (raw, fetched_at)：fetched_at = 所用回應中**最晚**的 startedDateTime（保守：不宣稱更早看到）。"""
+    回傳 (raw, fetched_at)：fetched_at = 所用回應中**最晚**的「回應完成時間」（startedDateTime + time；
+    保守：不宣稱更早看到）。**絕不**用匯入當下時間；晚於 now + 5 分鐘（時鐘錯誤 / 偽造）→ 拒絕。"""
     import base64
 
     entries = (har.get("log") or {}).get("entries") if isinstance(har, dict) else None
@@ -420,7 +433,7 @@ def raw_from_har(har: dict) -> tuple[dict, datetime]:
             body = json.loads(text)
         except (KeyError, ValueError, TypeError):
             continue
-        t = ensure_utc(datetime.fromisoformat(str(e["startedDateTime"]).replace("Z", "+00:00")))
+        t = _response_done_at(e)
         key = (cid.get("type"), cid.get("id"))
         if key not in got or t > got[key][0]:
             got[key] = (t, body)
@@ -452,4 +465,7 @@ def raw_from_har(har: dict) -> tuple[dict, datetime]:
     raw["tournaments"] = list(by_tour.values())
     if not used:
         raise ParserChanged("HAR 內沒有任何 NBA 聯賽的 eventGroup 回應（請在 NBA 聯賽頁面匯出）")
-    return raw, max(used)
+    fetched_at = max(used)
+    if fetched_at > ensure_utc(now or datetime.now(timezone.utc)) + timedelta(minutes=5):
+        raise ParserChanged(f"HAR 的擷取時間 {fetched_at.isoformat()} 在未來（裝置時鐘錯誤？）；拒絕匯入以免污染 as-of")
+    return raw, fetched_at

@@ -124,7 +124,7 @@ GET /api/games/today     → 500，僅 10ms 就被判定「Worker's code had hun
 4 筆預測（含 `features_json` 的 contributions）、28 筆盤口快照（台彩多時間點 + 國際盤對照）、
 9 筆傷病申報、8 個資料來源狀態、2 筆回測績效。
 
-**測試帳號**：`demo@example.com` / `nba12345678`（⚠️ 正式環境請刪除）
+**測試帳號（僅限本機 D1 沙盒 seed）**：`demo@example.com` / `nba12345678`。⚠️ 這組密碼是公開的：絕不可存在於正式資料庫；上線前用 `pipeline/run_data_audit.py` 檢查，見 [docs/production-runbook.md](docs/production-runbook.md) §6。
 
 ## 使用者指南
 

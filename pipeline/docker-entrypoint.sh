@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BOOTSTRAP_DIR="/app/artifacts/production"
+BOOTSTRAP_DIR="${BOOTSTRAP_ARTIFACT_DIR:-/app/artifacts/production}"   # 只供測試覆寫；Railway 不需設定
 ARTIFACT_DIR="${MODEL_ARTIFACT_DIR:-/app/artifacts/production}"
 
 echo "[entrypoint] MODEL_ARTIFACT_DIR=${ARTIFACT_DIR}"

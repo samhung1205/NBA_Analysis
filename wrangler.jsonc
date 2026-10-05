@@ -22,5 +22,16 @@
       "database_name": "webapp-production",
       "database_id": "local-dev-placeholder"
     }
-  ]
+  ],
+
+  // ────────────────────────────────────────────────────────────
+  // ⚠️ 帶 pages_build_output_dir 的 wrangler 檔，`wrangler pages deploy` 會把「上面這份本機設定」
+  //    當成 production 設定。上面的 D1 是本機沙盒佔位（local-dev-placeholder），不可帶進線上：
+  //    線上一律走 Postgres（DATABASE_URL secret），所以 production / preview 明確清空 D1 binding。
+  //    本機 `wrangler pages dev` 仍使用上面的 D1。
+  // ────────────────────────────────────────────────────────────
+  "env": {
+    "production": { "d1_databases": [] },
+    "preview": { "d1_databases": [] }
+  }
 }

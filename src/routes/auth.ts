@@ -13,16 +13,25 @@ import {
   setSessionCookie,
   clearSessionCookie,
   getCurrentUser,
+  resolveSessionSecret,
+  registrationAllowed,
 } from '../lib/auth'
 
 const auth = new Hono<{ Bindings: AppBindings }>()
 
 function secretOf(env: AppBindings) {
-  return env.SESSION_SECRET || 'dev-insecure-secret-change-me'
+  return resolveSessionSecret(env)
 }
 
 auth.post('/register', async (c) => {
   const db = await getDb(c.env)
+  // 正式環境（Postgres）是個人使用：只有「還沒有任何使用者」或明確設定 ALLOW_REGISTRATION=true 才開放註冊，
+  // 避免陌生人建立帳號並被 decision board 物化流程納入。
+  if (db.driver === 'postgres' && (c.env as any).ALLOW_REGISTRATION !== 'true') {
+    const row = await db.one<{ n: number | string }>('SELECT COUNT(*) AS n FROM users')
+    if (!registrationAllowed(db.driver, (c.env as any).ALLOW_REGISTRATION, Number(row?.n ?? 0)))
+      return c.json({ error: 'registration_closed', message: '此網站未開放註冊' }, 403)
+  }
   const body = await c.req.json().catch(() => ({}))
   const email = String((body as any).email ?? '').trim()
   const password = String((body as any).password ?? '')
