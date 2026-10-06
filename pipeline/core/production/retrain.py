@@ -251,6 +251,19 @@ def retrain_job() -> RetrainResult | None:
     from ..db import cursor, heartbeat
     meta = dict(source_key="model_retrain", display_name="模型重訓（ml-v2.0）", category="model",
                 expected_interval_min=7 * 24 * 60)
+    from . import activity
+    try:    # scheduler-efficiency-v1：沒有新的訓練資料就不重訓（不產生與現行 artifact 數學上相同的新版本）
+        with cursor() as cur:
+            st = activity.retrain_state(cur, now_utc(), activity.current_artifact_n_games(), buffer=spec.TRAINING_GAME_BUFFER)
+    except Exception:  # noqa: BLE001 — 判斷失敗 → 保守地照常重訓
+        log.exception("重訓前置檢查失敗，照常重訓")
+        st = activity.RetrainState(True, "precheck_failed")
+    if not st.has_new_data:
+        activity.log_skip("retrain", "no_new_training_data",
+                          f"retrain_skipped_no_new_data games={st.n_games_now} artifact_games={st.n_games_artifact}", every_s=0)
+        with cursor() as cur:
+            heartbeat(cur, status="ok", **meta)
+        return None
     try:
         res = retrain()
     except art_mod.LockBusy as e:

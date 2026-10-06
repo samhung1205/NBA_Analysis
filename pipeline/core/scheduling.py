@@ -49,7 +49,7 @@ def guarded(fn: Callable) -> Callable:
 
 def job_specs() -> list[JobSpec]:
     # 延遲 import：純排程時間測試不需要載入資料層
-    from .jobs.daily import fetch_injuries_job, fetch_schedule_and_scores_job, refresh_live_and_final_job
+    from .jobs.daily import fetch_schedule_and_scores_job, injury_poll_job, refresh_live_and_final_job
     from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
     from .production.retrain import retrain_job
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
@@ -67,10 +67,10 @@ def job_specs() -> list[JobSpec]:
                 "每 5 分鐘：依 game_time_utc 判斷有無進行中/待結算賽事，沒有就不打外部來源"),
         # 規格書 §5：比賽日每 30 分鐘，美東尖峰時段加密到每 15 分。
         # 美東 11:00~22:00 ≈ 台灣 00:00~11:00（夏令差 12 小時、冬令差 13 小時，取聯集）。
-        JobSpec("injuries_peak", fetch_injuries_job,
+        JobSpec("injuries_peak", injury_poll_job,
                 CronTrigger(hour="0-10", minute="*/15", timezone=TPE),
-                "台灣 00:00~10:59 每 15 分鐘（美東白天至傍晚，官方報告集中發布）"),
-        JobSpec("injuries_offpeak", fetch_injuries_job,
+                "台灣 00:00~10:59 每 15 分鐘醒來；是否真的抓取由 scheduler-efficiency-v1 依下一場比賽距離決定（>36h 不抓、≤3h 每 15 分…）"),
+        JobSpec("injuries_offpeak", injury_poll_job,
                 CronTrigger(hour="11-23", minute="0,30", timezone=TPE),
                 "台灣 11:00~23:59 每 30 分鐘", startup_catchup=False),
         # ---- C.5D：production 預測 / 重訓 ---- #

@@ -302,11 +302,33 @@ def paper_settlement_job(now: datetime | None = None, *, policy: ExecutionPolicy
     return rep
 
 
+def paper_has_work(cur, now: datetime, *, scopes: Iterable[StrategyScope] = PROSPECTIVE_SCOPES,
+                   policy: ExecutionPolicy = EXECUTION_V1, risk: RiskPolicy = PRODUCTION_RISK_POLICY) -> bool:
+    """scheduler-efficiency-v1：有 T-60 decision 候選（與 _decide_scope 同一個 due_games 條件）或未結算的 paper bet 才需要跑。
+    兩個條件任一成立 → 完整 job（execution-v1 語意完全不變；>15 分鐘的 decision_window_missed 仍由 job 內判斷）。"""
+    for scope in scopes:
+        if due_games(cur, strategy_id(policy, risk, scope), now, policy):
+            return True
+    cur.execute("SELECT 1 FROM paper_strategy_bets WHERE settlement_status IN ('pending', 'ungradable') LIMIT 1")
+    return cur.fetchone() is not None
+
+
 def paper_strategy_scheduled() -> None:
     """排程進入點：先記錄到期的 T-60 decision，再結算；兩者各自隔離（決策失敗不影響結算）。心跳 data_sources.paper_strategy。"""
     from .. import db
+    from ..production import activity
 
     now = now_utc()
+    try:
+        with db.cursor() as cur:
+            work = paper_has_work(cur, now)
+    except Exception:  # noqa: BLE001 — 查詢失敗（例如 migration 未套用）→ 照舊跑完整 job，由它們回報原因
+        work = True
+    if not work:
+        activity.log_skip("paper", "no_candidate_or_open_bet")
+        with db.cursor() as cur:
+            db.heartbeat(cur, status="ok", records_updated=0, **HEARTBEAT)
+        return
     status, err, n = "ok", None, 0
     try:
         rep = paper_decision_job(now)

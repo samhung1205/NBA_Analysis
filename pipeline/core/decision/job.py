@@ -78,6 +78,7 @@ class DecisionReport:
     users: int = 0
     boards: list[dict[str, Any]] = field(default_factory=list)
     note: str | None = None
+    idle: bool = False
 
 
 def schema_ready(cur) -> bool:
@@ -332,9 +333,64 @@ def materialize(cur, now: datetime, *, dry_run: bool = False, user_ids: list[int
     return rep
 
 
+# ------------------------------------------------------------------ #
+# scheduler-efficiency-v1：idle 時只「確認」，不重算                           #
+# ------------------------------------------------------------------ #
+#
+# MATERIALIZATION_STALE_AFTER（10 分鐘，API / UI 合約）不放寬：idle 時每分鐘仍把「目前最新、內容確實沒變」的 snapshot
+# 的 last_confirmed_at 往前推（與完整路徑遇到相同 fingerprint 時做的事完全一樣：UPDATE last_confirmed_at），
+# 只是不再每分鐘重建 user × betting day 的整份 board。
+#
+# 「idle」= 同時滿足：(a) 目標日附近沒有任何未 final 的比賽；(b) 沒有未結算的實際注單（active & pending）；
+# (c) 沒有未結算的 paper bet；(d) 狀態向量（使用者 / bankroll risk_state / ledger / bet_events / bets / paper ledger /
+# 台彩來源狀態 / 今天日期）與上一次**完整物化**時相同；(e) 上一次完整物化在 30 分鐘內且來自同一個行程。
+# 任何一項不符 → 走完整路徑（含結算、ledger 同步、物化）。使用者新增 / 更正 / 作廢注單、bankroll 異動都會推進
+# risk_state_version / bet_events / ledger id，所以一定改變狀態向量。
+# 內容與 now 無關的證據：idle 時所有目標日的比賽都是 final → taiwan_odds_state 回 TW_GAME_STARTED（與時間無關），
+# 見 tests/test_scheduler_efficiency.py 的 fingerprint 等價測試。
+
+IDLE_STATE: dict[str, Any] = {"key": None, "at": None}
+
+
+def idle_probe(cur, now: datetime) -> tuple[bool, tuple]:
+    today = tpe_date(now)
+    lo = min(tpe_day_bounds_utc(today)[0], now - timedelta(hours=6))
+    cur.execute(
+        """SELECT
+             (SELECT COUNT(*) FROM games WHERE status <> 'final' AND date_utc >= %s AND date_utc <= %s) AS games_active,
+             (SELECT COUNT(*) FROM bets WHERE record_status = 'active' AND COALESCE(result, 'pending') = 'pending') AS bets_open,
+             (SELECT COUNT(*) FROM paper_strategy_bets WHERE settlement_status IN ('pending', 'ungradable')) AS paper_open,
+             (SELECT COUNT(*) FROM users) AS users_n, (SELECT COALESCE(MAX(id), 0) FROM users) AS users_max,
+             (SELECT COUNT(*) FROM bankroll_accounts) AS acc_n,
+             (SELECT COALESCE(SUM(risk_state_version), 0) FROM bankroll_accounts) AS risk_v,
+             (SELECT COALESCE(MAX(id), 0) FROM bankroll_ledger) AS ledger_max,
+             (SELECT COALESCE(MAX(id), 0) FROM bet_events) AS events_max,
+             (SELECT COUNT(*) FROM bets) AS bets_n, (SELECT COALESCE(MAX(id), 0) FROM bets) AS bets_max,
+             (SELECT COALESCE(MAX(id), 0) FROM paper_strategy_decisions) AS pdec_max,
+             (SELECT COALESCE(MAX(id), 0) FROM paper_strategy_bets) AS pbet_max,
+             (SELECT COUNT(*) FROM odds_fetch_runs WHERE source = 'twsport') AS tw_runs,
+             (SELECT COALESCE(last_status, '') || '/' || COALESCE(last_outcome, '') FROM data_sources
+               WHERE source_key = 'twsport') AS tw_state""", (lo, now + HORIZON))
+    r = cur.fetchone()
+    idle = not (r["games_active"] or r["bets_open"] or r["paper_open"])
+    key = (today.isoformat(),) + tuple(r[k] for k in ("users_n", "users_max", "acc_n", "risk_v", "ledger_max", "events_max",
+                                                       "bets_n", "bets_max", "pdec_max", "pbet_max", "tw_runs", "tw_state"))
+    return idle, key
+
+
+def confirm_latest_snapshots(cur, days: list[date], now: datetime) -> int:
+    """與完整路徑遇到相同 fingerprint 時相同的動作：把每位使用者 × 目標日「目前最新（UI 讀到的那一筆）」的 last_confirmed_at 往前推。"""
+    cur.execute("""UPDATE decision_snapshots SET last_confirmed_at = GREATEST(last_confirmed_at, %s)
+                    WHERE id IN (SELECT DISTINCT ON (user_id, betting_day) id FROM decision_snapshots
+                                  WHERE betting_day = ANY(%s)
+                                  ORDER BY user_id, betting_day, last_confirmed_at DESC, id DESC)""", (now, days))
+    return cur.rowcount
+
+
 def decision_board_job(now: datetime | None = None, *, dry_run: bool = False, user_ids: list[int] | None = None,
-                       days: list[date] | None = None, db=None) -> DecisionReport:
+                       days: list[date] | None = None, db=None, allow_idle_skip: bool = False) -> DecisionReport:
     from .. import db as default_db
+    from ..production import activity
 
     db = db or default_db
     now = ensure_utc(now or now_utc())
@@ -350,6 +406,18 @@ def decision_board_job(now: datetime | None = None, *, dry_run: bool = False, us
             rep.settled = settle_actual_bets(cur, now, dry_run=True)
             rep.ledger_entries = sync_settlement_ledger(cur, now, dry_run=True)
             return materialize(cur, now, dry_run=True, user_ids=user_ids, days=days, rep=rep)
+    probe: tuple[bool, tuple] | None = None
+    if allow_idle_skip and user_ids is None and days is None:
+        with db.cursor() as cur:
+            probe = idle_probe(cur, now)
+            idle_days = target_days(cur, now)
+            last_at = IDLE_STATE["at"]
+            if (probe[0] and IDLE_STATE["key"] == probe[1] and last_at is not None
+                    and now - last_at < activity.DECISION_IDLE_FULL_REFRESH):
+                confirm_latest_snapshots(cur, idle_days, now)
+                rep.idle, rep.note = True, "idle"
+                activity.log_skip("decision", "idle")
+                return rep
     with db.transaction() as cur:
         cur.execute("SELECT pg_try_advisory_xact_lock(hashtext(%s)) AS ok", (LOCK_KEY,))
         if not cur.fetchone()["ok"]:
@@ -364,6 +432,8 @@ def decision_board_job(now: datetime | None = None, *, dry_run: bool = False, us
             rep.note = "另一個 decision board 物化正在執行，略過"
             return rep
         materialize(cur, now, user_ids=user_ids, days=days, rep=rep)
+    if probe is not None:          # 完整物化成功後才記錄「這個狀態向量已完整物化過」（idle 才會被下一輪略過）
+        IDLE_STATE["key"], IDLE_STATE["at"] = (probe[1] if probe[0] else None), now
     return rep
 
 
@@ -373,7 +443,7 @@ def decision_board_scheduled() -> None:
 
     status, err, n = "ok", None, 0
     try:
-        rep = decision_board_job()
+        rep = decision_board_job(allow_idle_skip=True)
         n = rep.snapshots_new
         if rep.note and "0008" in rep.note:
             status, err = "warn", rep.note

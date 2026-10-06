@@ -118,10 +118,29 @@ def ingest_injury_rows(cur, rows: list[dict], report_utc: datetime, *, source: s
     return written, parsed.n_unmatched
 
 
+def injury_poll_job(now: datetime | None = None, *, fetch_job: Callable[..., int | None] | None = None) -> int | None:
+    """排程進入點（scheduler-efficiency-v1）：APScheduler 照舊每 15 / 30 分鐘醒來，這裡先用 DB 判斷要不要打外部來源。
+    依「下一場尚未開賽的 production-eligible 比賽」決定輪詢間隔（>36h 不抓；12–36h ≤ 每 120 分；3–12h ≤ 每 60 分；
+    0–3h ≤ 每 15 分），見 production/activity.py。被略過是正常狀態（只記 log，不寫心跳、不算錯誤）。
+    報告時間 / ET 探測 / 寫入語意全部沿用 fetch_injuries_job，不變。"""
+    from ..production import activity
+
+    now = now or now_utc()
+    with cursor() as cur:
+        dec = activity.injury_state(cur, now)
+        activity.sync_expected_interval(cur, "nbainjuries", dec.interval_min)
+    if not dec.run:
+        nxt = f"next_game={dec.next_game_utc:%Y-%m-%dT%H:%MZ} in {dec.hours_to_next:.1f}h" if dec.next_game_utc else ""
+        activity.log_skip("injuries", dec.reason, nxt)
+        return None
+    return (fetch_job or fetch_injuries_job)(now, expected_interval_min=dec.interval_min)
+
+
 def fetch_injuries_job(
     now: datetime | None = None, *, interval_minutes: int = 15, lookback_hours: int = 6,
     check: Callable[[datetime], bool] | None = None,
     fetch: Callable[[datetime], list[dict]] | None = None,
+    expected_interval_min: int = 30,
 ) -> int | None:
     """規格書 §5：比賽日每 30 分鐘（尖峰 15 分鐘）。
     以美東時間往回探測最近一份已發布報告（15 分鐘網格），解析後以 UTC 寫入 DB。
@@ -129,7 +148,7 @@ def fetch_injuries_job(
     now = now or now_utc()
     fetch = fetch or injuries_src.fetch_injury_report
     meta = dict(source_key="nbainjuries", display_name="NBA 官方傷病報告", category="injury",
-                expected_interval_min=30)
+                expected_interval_min=expected_interval_min)
 
     found_et = injuries_src.find_latest_report(
         now, interval_minutes=interval_minutes, lookback_hours=lookback_hours, check=check)

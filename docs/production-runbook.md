@@ -5,7 +5,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
 ```
  Cloudflare Pages (Hono web + API + auth)  ──reads/writes──▶  Supabase Postgres (Session pooler, port 5432)
                                                                       ▲
- Railway "nba-scheduler" (Python, 13 jobs, always on) ────────────────┘
+ Railway "nba-scheduler" (Python, 13 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
  The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — manual HAR import)
 ```
@@ -90,11 +90,49 @@ Auth model: `/api/decision-board`, `/api/bets*`, `/api/bankroll*` call `requireU
 - Taiwan odds: when you want fresh actionable odds, import a HAR (§7). No fresh HAR ⇒ pricing / sizing / decisions stay empty or stale — that is safe, not an error.
 - Weekly: first Monday after deploy watch Railway memory during `weekly_retrain` (Mon 16:00 Taipei). A failed retrain leaves the current artifact in place.
 
+## 4b. Scheduler efficiency / idle behavior (`scheduler-efficiency-v1`)
+
+Railway stays **always on** (a 24/7 `BlockingScheduler`). What changed is that expensive work is *game-aware*: every high-frequency job first asks Postgres (indexed, tiny queries) whether there is anything to do, and returns immediately if not. An idle skip is a normal outcome — not an error, not a missing heartbeat. "Eligible game" is the project's existing definition: `status <> 'final'` and `season_stage ∈ {regular, playin, playoffs}` (preseason never wakes the pipeline).
+
+| Job | Gate (idle ⇒ skip) | Unchanged on purpose |
+|---|---|---|
+| `injuries_peak` / `injuries_offpeak` | next eligible, not-yet-started game decides cadence (below) | ET report probing, report-time and as-of logic, history writes |
+| `predict_final`, `predict_injury_refresh` | no eligible game in their window ⇒ artifact not even loaded | `predict_early` (daily, doubles as artifact-health + liveness check) |
+| `market_pricing` (pricing + sizing) | no game in 48 h, or no odds snapshot yet ⇒ nothing to price/size. Pricing is also skipped when (games, max odds id, max prediction id) equals the last *successful* pricing run | **Sizing is not skipped while odds exist**: quote staleness (`stale_quote`) changes with time, so identical inputs at a later T can size differently |
+| `paper_strategy` | no T-60 candidate (same `due_games` query) and no pending/ungradable paper bet ⇒ no-op | execution-v1, the >15 min `decision_window_missed` rule |
+| `decision_board` | idle ⇒ every minute only **confirms** the latest snapshots (`last_confirmed_at`); full materialization at most every 30 min | the 10 min `MATERIALIZATION_STALE_AFTER` contract (see below) |
+| `weekly_retrain` | no more eligible final games than the promoted artifact was trained on ⇒ `retrain_skipped_no_new_data` | gates, atomic write, promote, rollback (manual `run_retrain.py` always trains) |
+| `odds_oddsapi` | none | 4 runs/day, free `/events` first, reserve/warn thresholds — a DB gate could miss games during schedule-ingestion lag for four free requests/day |
+| `odds_twsport` | disabled on Railway ⇒ one heartbeat upsert per 30 min | no anti-bot workaround; manual HAR is the path |
+| `daily_schedule_scores` | none | see below |
+| `live_final_refresh` | already gated before this change (no live/unsettled game ⇒ no external call) | |
+
+**Injury polling** (by time to the *nearest* eligible game that has not started; measured in UTC instants, so DST cannot distort it):
+
+| Time to next game | Policy |
+|---|---|
+| > 36 h or no game | no injury polling |
+| 12 h < t ≤ 36 h | at most once / 120 min |
+| 3 h < t ≤ 12 h | at most once / 60 min |
+| 0 < t ≤ 3 h | at most once / 15 min |
+| game already started | that game alone no longer triggers pregame polling |
+
+APScheduler still wakes every 15 / 30 min; the function decides. Cadence uses `data_sources.nbainjuries.last_attempt_at` (survives restarts), with a 2-minute grace so a run that finished a few seconds late does not wait a whole extra grid step. `expected_interval_min` follows the tier (NULL when idle), so the status page does not call an idle source stale.
+
+**Why schedule sync stays daily in the off-season:** `daily_schedule_scores` (12:00 Taipei) is the mechanism that discovers when games become relevant again. Every gate above is driven by what is in `games`; if sync stopped, nothing would ever wake up.
+
+**Why the decision board is not simply relaxed:** the UI marks a board `stale` when `last_confirmed_at` is older than 10 minutes, and a bet/bankroll change must show up immediately. So idle is narrow and verified each minute: no unfinished game around today/tomorrow, no open actual bet, no unsettled paper bet, and the state vector (users, bankroll `risk_state_version`, ledger / bet_events / bets ids, paper ledger ids, Taiwan source state, today's date) equals the one at the last full materialization (same process, < 30 min ago). Any change — a user recording, correcting or voiding a bet, a settlement, a new game, a HAR import, midnight — takes the full path (settlement → ledger sync → materialize). Process restart ⇒ first run is full.
+
+**Reading the logs:** `[scheduler-efficiency] <job> skipped: <reason>` — reasons `idle_no_upcoming_game`, `outside_injury_window`, `cadence_not_due`, `no_game_in_window`, `no_odds_snapshots`, `no_fresh_inputs`, `no_candidate_or_open_bet`, `idle`, `no_new_training_data`. INFO is logged when the reason changes and at most hourly otherwise (with an `xN since last log` count); the rest is DEBUG. `run_production_check.py` shows next eligible game, hours to it, injury tier, and whether pricing / paper / decision / retrain are active or idle. No dollar estimate: read Railway → Metrics after ~24 h.
+
+Rollback of the policy: `git revert <scheduler-efficiency commit>` and redeploy (restores the previous every-tick behavior; no data migration involved).
+
 ## 5. States
 
 | State | Meaning | Action |
 |---|---|---|
 | `WAITING` (no future games, no odds yet, no predictions, 0 decisions, no bankroll) | season timing / nothing to do yet | none |
+| `WAITING` nbainjuries / pricing / retrain "idle" | `scheduler-efficiency-v1` found nothing to do (§4b) | none |
 | `BLOCKED` twsport | auto-scrape disabled or Cloudflare-blocked (expected) | manual HAR when you want to bet |
 | `PASS` | healthy | none |
 | `WARN` oddsapi quota < 100 / < 25 | credits low | none until reserve (paid calls auto-stop); raise cadence never |

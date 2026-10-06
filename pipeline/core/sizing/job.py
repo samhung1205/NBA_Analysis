@@ -255,10 +255,66 @@ def sizing_job(now: datetime | None = None, *, horizon: timedelta = HORIZON, dry
     return rep
 
 
-def pricing_and_sizing_scheduled() -> None:
-    """排程進入點：同一個 T 先定價（D.2）再 sizing（D.3）——sizing 讀到的就是同一輪的定價列。"""
-    from ..pricing.job import pricing_job
+@dataclass(frozen=True)
+class PricingGate:
+    """scheduler-efficiency-v1：定價 / sizing 要不要做（只用 3 個便宜的索引查詢）。"""
+    run_pricing: bool
+    run_sizing: bool
+    reason: str                       # active / no_games_in_window / no_odds_snapshots / no_fresh_inputs
+    key: tuple | None = None
 
+
+_LAST_PRICED_KEY: tuple | None = None
+
+
+def pricing_gate(cur, now: datetime, last_key: tuple | None, *, horizon: timedelta = HORIZON) -> PricingGate:
+    """
+    * 48 小時內沒有 eligible 比賽 → 兩者都沒事做（pricing_job / sizing_job 本來就會回報「沒有比賽」）。
+    * 有比賽但沒有任何盤口快照 → 沒有東西可定價、也沒有 sizing 候選（兩者的輸出本來就是空的）。
+    * 定價輸入 key = (比賽集合, 這些比賽的最大 odds_snapshots.id, 最大 predictions.id)：與上次**成功**定價相同 →
+      pricing 的輸出已全部存在（寫入是 ON CONFLICT DO NOTHING、既有列永不改寫、輸入決定輸出），略過重建。
+    * sizing 不用 key 略過：報價新鮮度（stale_quote）隨時間改變，同樣輸入在不同 T 可能得到不同結果，所以有盤口就照舊每 5 分鐘算。
+    """
+    cur.execute("SELECT id FROM games WHERE date_utc > %s AND date_utc <= %s AND status <> 'final' ORDER BY id",
+                (now, now + horizon))      # 與 pricing_job 完全相同的比賽集合（不收窄、不擴大）
+    ids = [r["id"] for r in cur.fetchall()]
+    if not ids:
+        return PricingGate(False, False, "no_games_in_window")
+    cur.execute("SELECT (SELECT COALESCE(MAX(id), 0) FROM odds_snapshots WHERE game_id = ANY(%s) AND fetched_at <= %s) AS o, "
+                "(SELECT COALESCE(MAX(id), 0) FROM predictions WHERE game_id = ANY(%s) AND created_at <= %s) AS p",
+                (ids, now, ids, now))
+    r = cur.fetchone()
+    if not r["o"]:
+        return PricingGate(False, False, "no_odds_snapshots")
+    key = (tuple(ids), int(r["o"]), int(r["p"]))
+    if key == last_key:
+        return PricingGate(False, True, "no_fresh_inputs", key)
+    return PricingGate(True, True, "active", key)
+
+
+def pricing_and_sizing_scheduled() -> None:
+    """排程進入點：同一個 T 先定價（D.2）再 sizing（D.3）——sizing 讀到的就是同一輪的定價列。
+    scheduler-efficiency-v1：先用 pricing_gate 判斷有沒有事；idle 只更新兩個心跳（既有列的 UPSERT），不重建定價。"""
+    from .. import db
+    from ..pricing.job import HEARTBEAT as PRICING_HEARTBEAT
+    from ..pricing.job import pricing_job
+    from ..production import activity
+
+    global _LAST_PRICED_KEY
     now = now_utc()
-    pricing_job(now)
+    with db.cursor() as cur:
+        gate = pricing_gate(cur, now, _LAST_PRICED_KEY)
+    if not gate.run_pricing and not gate.run_sizing:
+        activity.log_skip("pricing", gate.reason)
+        with db.cursor() as cur:
+            db.heartbeat(cur, status="ok", records_updated=0, **PRICING_HEARTBEAT)
+            db.heartbeat(cur, status="ok", records_updated=0, **HEARTBEAT)
+        return
+    if gate.run_pricing:
+        rep = pricing_job(now)
+        _LAST_PRICED_KEY = gate.key if not rep.errors else None      # 失敗（例如 artifact 載入）→ 下一輪重試
+    else:
+        activity.log_skip("pricing", gate.reason)
+        with db.cursor() as cur:
+            activity.touch_heartbeat(cur, **PRICING_HEARTBEAT)      # 保留上次的 ok / warn 狀態，只更新「有在跑」
     sizing_job(now)

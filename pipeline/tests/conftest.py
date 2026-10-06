@@ -71,6 +71,10 @@ def db(_pg_schema, monkeypatch):
     pool = ConnectionPool(core.config.settings.database_url, min_size=1, max_size=3, open=True,
                           kwargs={"row_factory": dict_row, "autocommit": True}, configure=configure)
     monkeypatch.setattr(coredb, "_pool", pool)
+    # advisory lock 是整個資料庫共用的（不分 schema）：正式環境的排程器每分鐘也在拿 decision_board 的 try-lock，
+    # 測試若用同一把鎖會被它擋下（「另一個物化正在執行，略過」）→ 每個測試 schema 用自己的鎖名。
+    import core.decision.job as _dj
+    monkeypatch.setattr(_dj, "LOCK_KEY", f"{_dj.LOCK_KEY}:{_pg_schema}")
     with coredb.cursor() as cur:
         cur.execute("TRUNCATE " + ", ".join(TABLES) + " RESTART IDENTITY CASCADE")
     yield coredb

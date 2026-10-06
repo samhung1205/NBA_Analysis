@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ..timeutil import ensure_utc, now_utc, parse_utc
+from . import activity
 from . import artifact as art_mod
 from . import spec
 from .features import HistoryInputs, ScheduledGame
@@ -163,6 +164,15 @@ def predict_upcoming_games_job(kind: str = "early", now: datetime | None = None,
         raise ValueError(f"kind 必須是 {KINDS}")
     now = ensure_utc(now or now_utc())
     rep = PredictReport(kind, now.isoformat())
+    if kind != "early" and game_ids is None and not dry_run:
+        # scheduler-efficiency-v1：final / refresh 每 5~15 分鐘醒來；視窗內沒有任何 eligible 比賽就不載入 artifact。
+        # （early 每日一次，照舊載入 artifact —— 它同時是 artifact 損壞的每日偵測 + 存活心跳。）
+        lo, hi = ((now + MIN_LEAD, now + FINAL_WINDOW) if kind == "final" else (now + FINAL_WINDOW, now + horizon))
+        with cursor() as cur:
+            if not activity.has_eligible_game_between(cur, lo, hi):
+                rep.note = "視窗內沒有 eligible 比賽（scheduler-efficiency-v1）"
+                activity.log_skip(f"predict_{kind}", "no_game_in_window")
+                return rep
     try:
         art = art_mod.load_current(root)
     except art_mod.ArtifactError as e:

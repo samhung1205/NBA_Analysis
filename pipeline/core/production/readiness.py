@@ -277,9 +277,20 @@ def check_heartbeats(cur, now: datetime, post_deploy: bool) -> list[Check]:
     jobs = [("decision_board", 1, True), ("market_pricing", 5, True), ("bet_sizing", 5, True),
             ("paper_strategy", 5, True), ("model_predict", 24 * 60, False), ("nbainjuries", 30, False),
             ("model_retrain", 7 * 24 * 60, False)]
+    from . import activity
+    inj = activity.injury_state(cur, now)          # scheduler-efficiency-v1：injuries 的預期間隔取決於下一場比賽距離
     out = []
     for key, exp, crit in jobs:
         row = rows.get(key)
+        if key == "nbainjuries":
+            if inj.interval_min is None:
+                out.append(Check("heartbeat", key, WAITING if row is None or row.get("last_status") != "error" else WARN,
+                                 f"idle by scheduler-efficiency-v1（{inj.reason}）：沒有 36 小時內的 eligible 比賽，不輪詢是正常的"))
+                continue
+            st, d = classify_heartbeat(row, now, expected_min=inj.interval_min, critical=False, post_deploy=post_deploy,
+                                       stale_factor=2.0, min_stale_min=30)
+            out.append(Check("heartbeat", key, st, f"tier {inj.tier}（≤ 每 {inj.interval_min} 分鐘）；{d}"))
+            continue
         if key == "model_retrain":
             if row is None:
                 out.append(Check("heartbeat", key, WAITING, "尚未重訓過（每週一 16:00 台灣時間）"))
@@ -298,6 +309,29 @@ def check_heartbeats(cur, now: datetime, post_deploy: bool) -> list[Check]:
         out.append(Check("heartbeat", f"schedule/scores ({best['source_key']})", st, d))
     else:
         out.append(Check("heartbeat", "schedule/scores", WAITING if not post_deploy else WARN, "尚無賽程來源心跳"))
+    return out
+
+
+def check_efficiency(cur, now: datetime, artifact_root: Path | None = None) -> list[Check]:
+    """scheduler-efficiency-v1 目前狀態（唯讀；不估算 Railway 費用，實際用量看 Railway Metrics）。"""
+    from . import activity
+    a = activity.activity_summary(cur, now, root=artifact_root)
+    nxt = a["next_game_utc"]
+    out = [Check("efficiency", "policy", PASS, a["policy"]),
+           Check("efficiency", "next eligible game", PASS if nxt else WAITING,
+                 f"{nxt.isoformat(timespec='minutes')}（{a['hours_to_next']:.1f} 小時後）" if nxt
+                 else "沒有尚未開賽的 production-eligible 比賽（休賽期 / 賽程尚未同步）"),
+           Check("efficiency", "injury polling tier", PASS if a["injury_interval_min"] else WAITING,
+                 f"{a['injury_tier']}" + (f"：最多每 {a['injury_interval_min']} 分鐘" if a["injury_interval_min"] else "：不輪詢（idle）")
+                 + f"；此刻 {'會' if a['injury_would_run_now'] else '不會'}抓取（{a['injury_reason']}）"),
+           Check("efficiency", "pricing / sizing", PASS if a["pricing_window_has_games"] else WAITING,
+                 "active（48 小時內有比賽；有盤口 / 新預測才會重算）" if a["pricing_window_has_games"] else "idle（48 小時內沒有比賽）"),
+           Check("efficiency", "paper strategy", PASS, f"未結算 paper bet {a['open_paper_bets']}（有 T-60 候選或未結算注單才會執行）"),
+           Check("efficiency", "decision board", PASS,
+                 f"未結算實際注單 {a['open_actual_bets']}；" + ("active（完整物化）" if a["open_actual_bets"] or a["pricing_window_has_games"]
+                                                            else "可能 idle（每分鐘只確認、每 30 分鐘完整重算）")),
+           Check("efficiency", "retrain", PASS if a["retrain_has_new_data"] else WAITING,
+                 f"{a['retrain_reason']}（符合訓練條件的比賽 {a['retrain_games_now']} vs artifact {a['retrain_games_artifact']}）")]
     return out
 
 
@@ -382,6 +416,7 @@ def run_checks(*, post_deploy: bool = False, now: datetime | None = None, env: d
                              ("games", lambda: check_games_and_predictions(cur, now)),
                              ("heartbeats", lambda: check_heartbeats(cur, now, post_deploy)),
                              ("odds", lambda: check_odds(cur, now, env, post_deploy)),
+                             ("efficiency", lambda: check_efficiency(cur, now, artifact_root)),
                              ("pipeline", lambda: check_pricing_to_evidence(cur, now))):
                 out += _guard(name, name, fn)
                 if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:

@@ -55,8 +55,14 @@ def test_sizing_runs_in_same_job_right_after_pricing_with_same_as_of(monkeypatch
 
     assert spec("market_pricing").func is sizing_job_mod.pricing_and_sizing_scheduled
     calls = []
-    monkeypatch.setattr(pricing_job_mod, "pricing_job", lambda now: calls.append(("pricing", now)))
+    monkeypatch.setattr(pricing_job_mod, "pricing_job", lambda now: calls.append(("pricing", now)) or type("R", (), {"errors": []})())
     monkeypatch.setattr(sizing_job_mod, "sizing_job", lambda now: calls.append(("sizing", now)))
+    # scheduler-efficiency-v1 的 gate 讀 DB；這個測試只驗證接線（同一個 T、先定價再 sizing），所以固定 gate = 有事做，且不連線
+    import contextlib
+    import core.db as coredb
+    monkeypatch.setattr(sizing_job_mod, "pricing_gate", lambda cur, now, last, **k: sizing_job_mod.PricingGate(True, True, "active", ("k",)))
+    monkeypatch.setattr(sizing_job_mod, "_LAST_PRICED_KEY", None)
+    monkeypatch.setattr(coredb, "cursor", contextlib.contextmanager(lambda: (yield None)))
     sizing_job_mod.pricing_and_sizing_scheduled()
     assert [c[0] for c in calls] == ["pricing", "sizing"] and calls[0][1] == calls[1][1]
     assert not any("kelly" in s.id or "sizing" in s.id for s in job_specs())
