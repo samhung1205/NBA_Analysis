@@ -67,3 +67,5 @@ pipeline/artifacts/production/.lock
 *.har.json
 captures/
 pipeline/captures/
+
+DEPLOY.md
