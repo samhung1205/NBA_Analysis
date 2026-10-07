@@ -2,7 +2,7 @@
 /**
  * 產生與 src/lib/auth.ts 相同格式的密碼雜湊
  * 用法：node seed/make-password-hash.mjs "你的密碼"
- * 輸出：pbkdf2$210000$<salt_b64>$<hash_b64>
+ * 輸出：pbkdf2$100000$<salt_b64>$<hash_b64>
  */
 import { webcrypto as crypto } from 'node:crypto'
 
@@ -12,7 +12,7 @@ if (!password) {
   process.exit(1)
 }
 
-const ITER = 210_000
+const ITER = 100_000   // Cloudflare WebCrypto 上限
 const salt = crypto.getRandomValues(new Uint8Array(16))
 const key = await crypto.subtle.importKey(
   'raw',

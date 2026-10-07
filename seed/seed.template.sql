@@ -560,11 +560,11 @@ INSERT INTO model_metrics (model_version, season, evaluated_at, n_games, accurac
 
 -- ------------------------- 測試帳號 -------------------------
 -- 帳號：demo@example.com　密碼：nba12345678
--- 雜湊由 `node seed/make-password-hash.mjs "<密碼>"` 產生（與 src/lib/auth.ts 同格式）
+-- 雜湊由 `node seed/make-password-hash.mjs "<密碼>"` 產生（與 src/lib/auth.ts 同格式；100,000 次 = Cloudflare WebCrypto 上限）
 -- ⚠️ 正式環境請刪除此測試帳號，改用 /login 頁面自行註冊
 INSERT INTO users (email, password_hash, display_name) VALUES
   ('demo@example.com',
-   'pbkdf2$210000$aM/7vl/sgW2Sllr61lDirQ==$mhclR2wcId1f3yv27DPMpO4/NwcRiRBN5kQr/Y5k8z4=',
+   'pbkdf2$100000$4gKW40+KegcL/0R+vi2rTQ==$0mkJCBrC+2XX0nndi7LSBGl/+sdyGkoEQ6zyiv3hOh4=',
    '開發測試帳號');
 
 -- ---------------------- D.5 demo bankroll / 實際下注 / 決策中心 ----------------------

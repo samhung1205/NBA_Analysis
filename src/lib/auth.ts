@@ -3,7 +3,9 @@
  * ------------------------------------------------------------
  * 個人登入 email/password，保護 bets / 績效等私人資料。
  * 全部使用 Web Crypto API（Cloudflare Workers 可用，無 Node.js 依賴）：
- *   - 密碼：PBKDF2-SHA256 (210,000 iterations) + 16-byte random salt
+ *   - 密碼：PBKDF2-SHA256 (100,000 iterations) + 16-byte random salt
+ *     ⚠️ Cloudflare WebCrypto 目前最多只支援 100,000 次（超過會丟 NotSupportedError），所以新雜湊使用 runtime 上限；
+ *        這「不等同」210,000 次的強度，由註冊密碼最短 12 字元補強（私人單人站台）。驗證時迭代次數仍讀自儲存的雜湊。
  *   - Session：HMAC-SHA256 簽章的 cookie，無需額外儲存
  */
 
@@ -11,7 +13,10 @@ import type { Context } from 'hono'
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie'
 import type { AppBindings, Db } from '../db'
 
-const PBKDF2_ITERATIONS = 210_000
+export const PBKDF2_ITERATIONS = 100_000
+/** Cloudflare WebCrypto PBKDF2 的迭代上限；儲存的雜湊要求更多次 → 本 runtime 無法驗證 → 安全地視為驗證失敗 */
+export const MAX_SUPPORTED_ITERATIONS = 100_000
+export const MIN_REGISTER_PASSWORD_LENGTH = 12
 const SESSION_COOKIE = 'nba_session'
 const SESSION_TTL_SEC = 60 * 60 * 24 * 14 // 14 天
 
@@ -69,13 +74,27 @@ export async function hashPassword(password: string): Promise<string> {
   return `pbkdf2$${PBKDF2_ITERATIONS}$${b64encode(salt)}$${b64encode(bits)}`
 }
 
+/**
+ * 驗證密碼。任何不支援 / 格式錯誤的儲存雜湊都 fail closed（回 false），絕不丟出 WebCrypto 例外。
+ * 迭代次數讀自儲存的雜湊（不寫死 100,000）；超過 runtime 上限或不是合理的正整數 → false。
+ * 只在伺服器 log 記「有一筆雜湊不被支援」，不記 email / 雜湊內容 / 密碼。
+ */
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   try {
-    const [scheme, iterStr, saltB64, hashB64] = stored.split('$')
-    if (scheme !== 'pbkdf2') return false
-    const bits = await deriveBits(password, b64decode(saltB64), parseInt(iterStr, 10))
+    const parts = typeof stored === 'string' ? stored.split('$') : []
+    if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false
+    const [, iterStr, saltB64, hashB64] = parts
+    if (!/^\d{1,9}$/.test(iterStr)) return false
+    const iterations = parseInt(iterStr, 10)
+    if (iterations < 1) return false
+    if (iterations > MAX_SUPPORTED_ITERATIONS) {
+      console.warn(`[auth] stored password hash requests ${iterations} PBKDF2 iterations; runtime max is ${MAX_SUPPORTED_ITERATIONS} → login refused`)
+      return false
+    }
+    const bits = await deriveBits(password, b64decode(saltB64), iterations)
     return timingSafeEqual(new Uint8Array(bits), b64decode(hashB64))
-  } catch {
+  } catch (e) {
+    console.warn('[auth] password verification failed closed:', e instanceof Error ? e.name : 'error')
     return false
   }
 }

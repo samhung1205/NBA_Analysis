@@ -274,12 +274,11 @@ pages.get('/login', (c) => {
             />
           </label>
           <label class="block">
-            <span class="text-[11px] text-slate-500">密碼（至少 8 字元）</span>
+            <span id="pw-label" class="text-[11px] text-slate-500">密碼</span>
             <input
               name="password"
               type="password"
               required
-              minlength={8}
               autocomplete="current-password"
               class="w-full mt-1 bg-slate-800 border border-slate-700 rounded px-2.5 py-2 text-sm"
             />

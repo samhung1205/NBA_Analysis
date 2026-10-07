@@ -19,7 +19,7 @@
     "db:seed:pg": "node scripts/pg-seed.mjs",
     "pw:hash": "node seed/make-password-hash.mjs",
     "seed:render": "node scripts/render-seed.mjs",
-    "test:auth": "node --experimental-strip-types --no-warnings scripts/auth-guard-test.mjs"
+    "test:auth": "node --experimental-transform-types --no-warnings --import ./scripts/register-ts-resolve.mjs scripts/auth-guard-test.mjs"
   },
   "dependencies": {
     "hono": "^4.12.30",

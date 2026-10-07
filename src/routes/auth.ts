@@ -15,6 +15,7 @@ import {
   getCurrentUser,
   resolveSessionSecret,
   registrationAllowed,
+  MIN_REGISTER_PASSWORD_LENGTH,
 } from '../lib/auth'
 
 const auth = new Hono<{ Bindings: AppBindings }>()
@@ -39,9 +40,17 @@ auth.post('/register', async (c) => {
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
     return c.json({ error: 'email 格式不正確' }, 400)
-  if (password.length < 8) return c.json({ error: '密碼至少 8 個字元' }, 400)
+  if (password.length < MIN_REGISTER_PASSWORD_LENGTH)
+    return c.json({ error: `密碼至少 ${MIN_REGISTER_PASSWORD_LENGTH} 個字元` }, 400)
 
-  const user = await registerUser(db, email, password, displayName)
+  let user
+  try {
+    user = await registerUser(db, email, password, displayName)
+  } catch (e) {
+    // 例如 runtime 的 WebCrypto 限制：只在伺服器記錄，瀏覽器只拿到通用訊息（不洩漏 crypto / 資料庫細節）
+    console.error('[auth] register failed:', e)
+    return c.json({ error: 'internal_error', message: '無法建立帳號，請稍後再試' }, 500)
+  }
   if (!user) return c.json({ error: '此 email 已註冊' }, 409)
 
   const token = await createSessionToken(secretOf(c.env), user.id, user.email)

@@ -6,6 +6,8 @@
   const modeBtns = document.querySelectorAll('[data-mode]');
   const nameField = document.getElementById('name-field');
   const submitBtn = document.getElementById('auth-submit');
+  const pwInput = form.querySelector('input[name="password"]');
+  const pwLabel = document.getElementById('pw-label');
   let mode = 'login';
 
   const next = new URLSearchParams(location.search).get('next') || '/';
@@ -21,6 +23,10 @@
       });
       nameField.classList.toggle('hidden', mode !== 'register');
       submitBtn.textContent = mode === 'login' ? '登入' : '註冊並登入';
+      // 只有「註冊」要求至少 12 字元；登入不限制長度（不影響既有密碼）
+      pwInput.minLength = mode === 'register' ? 12 : 0;
+      pwInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+      pwLabel.textContent = mode === 'register' ? '密碼（至少 12 字元）' : '密碼';
       msg.textContent = '';
     });
   });
