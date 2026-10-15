@@ -462,9 +462,16 @@ ok('  actual_performance（Python 物化）標示 User actual betting record',
   demoBets?.actual_performance?.label === 'user_actual_betting_record')
 ok('  其他使用者的注單看不到 / 改不到', !(demoBets?.bets || []).some((b) => otherUserBets.some((o) => o.id === b.id)) &&
   (await req(`/api/bets/${otherUserBets[0]?.id ?? 999999}`)).status === 404)
-const corr = await post(`/api/bets/${won.body?.id}/correction`, { stake: stakeA - 1, reason: 'smoke typo' })
+const correctionPayload = { stake: stakeA - 1, reason: 'smoke typo', client_request_id: 'smoke-correction-001' }
+const correctionCheck = await post(`/api/bets/${won.body?.id}/correction`, correctionPayload)
+ok('更正先要求明確確認，不能沿用原注單的合規標記', correctionCheck.status === 409 &&
+  correctionCheck.body?.error === 'confirmation_required' && correctionCheck.body?.compliance_if_confirmed === 'missing_context')
+const corr = await post(`/api/bets/${won.body?.id}/correction`, { ...correctionPayload, confirm_override: true })
 ok('更正 → 新紀錄 supersedes 舊紀錄（舊紀錄不覆寫）', corr.status === 201 && corr.body?.supersedes_bet_id === won.body?.id &&
-  corr.body?.bet?.strategy_compliance === won.body?.bet?.strategy_compliance)
+  corr.body?.bet?.strategy_compliance === 'missing_context' && corr.body?.bet?.risk_check?.confirmed === true)
+const correctionReplay = await post(`/api/bets/${won.body?.id}/correction`, { ...correctionPayload, confirm_override: true })
+ok('更正重送相同 request id → replay（不重複取代）', correctionReplay.status === 200 &&
+  correctionReplay.body?.replay === true && correctionReplay.body?.id === corr.body?.id)
 const oldAfter = (await req(`/api/bets/${won.body?.id}`)).body?.bet
 ok('  舊紀錄 record_status = superseded、stake 不變', oldAfter?.record_status === 'superseded' && oldAfter?.stake === won.body?.bet?.stake)
 

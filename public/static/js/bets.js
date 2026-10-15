@@ -258,8 +258,15 @@
           if (odds === null) return;
           const reason = prompt('更正原因（必填；舊紀錄會標為 superseded，不會覆寫）：');
           if (!reason) return;
+          const payload = { stake: Number(stake), odds: Number(odds), reason, client_request_id: newRequestId() };
           try {
-            await NBA.post(`/api/bets/${btn.dataset.fix}/correction`, { stake: Number(stake), odds: Number(odds), reason });
+            try {
+              await NBA.post(`/api/bets/${btn.dataset.fix}/correction`, payload);
+            } catch (e) {
+              if (e.status !== 409 || e.data?.error !== 'confirmation_required') throw e;
+              if (!confirm(e.data.message)) return;
+              await NBA.post(`/api/bets/${btn.dataset.fix}/correction`, { ...payload, confirm_override: true });
+            }
             loadBets();
           } catch (e) { alert(e.data?.message || e.message); }
         });

@@ -5,7 +5,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
 ```
  Cloudflare Pages (Hono web + API + auth)  ──reads/writes──▶  Supabase Postgres (Session pooler, port 5432)
                                                                       ▲
- Railway "nba-scheduler" (Python, 13 jobs, always on, game-aware — §4b) ────────────────┘
+ Railway "nba-scheduler" (Python, 16 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
  The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — manual HAR import)
 ```
@@ -44,7 +44,9 @@ Variables (names only — enter values in the Railway UI). Everything the Python
 | `ODDS_API_CRON_HOURS` | `0,6,12,18` | Taipei time, :40 — 3 credits per run when games are in the 48 h window, 0 otherwise |
 | `TZ` | `Asia/Taipei` | log timestamps only; all triggers carry an explicit timezone |
 
-Optional (defaults are fine): `PG_POOL_MAX` (4; Supabase session pooler has ~15 shared slots with the website), `ODDS_API_BOOKMAKERS`, `BALLDONTLIE_API_KEY`, `NBA_API_MIN_DELAY`/`NBA_API_MAX_DELAY`, `ALERT_WEBHOOK_URL`. **Not needed by the scheduler:** `SESSION_SECRET` (website only), Telegram/LINE variables (not read by any code).
+Optional (defaults are fine): `PG_POOL_MAX` (4; Supabase session pooler has ~15 shared slots with the website), `ODDS_API_BOOKMAKERS`, `BALLDONTLIE_API_KEY`, `NBA_API_MIN_DELAY`/`NBA_API_MAX_DELAY`, `ALERT_WEBHOOK_URL`. **Not needed by the scheduler:** `SESSION_SECRET` (website only), `LINE_CHANNEL_ACCESS_TOKEN` (not read by any code).
+
+Telegram push (Phase E.1, optional — §4c): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (both required to enable), optional `TELEGRAM_NOTIFY_USER_ID`, `TELEGRAM_NOTIFY_INCLUDE_REVIEW`, `NOTIFY_SITE_URL`. Requires migration `0009_phase_e1_notifications.sql`.
 
 ### Post-deploy checks (Railway)
 
@@ -54,10 +56,10 @@ First boot logs (Deploy logs):
 [entrypoint] MODEL_ARTIFACT_DIR=/data/model-artifacts
 [entrypoint] No persistent production artifact found; bootstrapping...
 [entrypoint] Bootstrap artifact copied.
-... 已登錄 job：<id> — ...     (13 lines)
+... 已登錄 job：<id> — ...     (16 lines)
 ```
 
-Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`.
+Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured).
 
 1. **Stays alive** – no restart loop; log lines keep arriving every minute (`decision_board`).
 2. **Heartbeats / DB writes** – from your laptop (reads `pipeline/.env`, read-only):
@@ -128,6 +130,22 @@ APScheduler still wakes every 15 / 30 min; the function decides. Cadence uses `d
 
 Rollback of the policy: `git revert <scheduler-efficiency commit>` and redeploy (restores the previous every-tick behavior; no data migration involved).
 
+## 4c. Telegram push (`notify-v1`, Phase E.1, optional)
+
+Reads only what Python already materialized; computes no probability / EV / Kelly / capacity, and never places bets. Disabled (jobs return at once, no DB access, no heartbeat) until both `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set.
+
+| Job | When (Taipei) | Sends |
+|---|---|---|
+| `notify_actionable` | every minute at :50 s (after `decision_board`) | new Taiwan **ACTIONABLE** opportunities from the user's latest decision snapshot, only if it was confirmed ≤ 10 min ago. One message per batch; each game × market × side × line × odds is sent once. `TELEGRAM_NOTIFY_INCLUDE_REVIEW=true` also sends **REVIEW** (qualified but data-quality flagged — early season most opportunities are REVIEW). International odds are never sent. |
+| `notify_daily_summary` | 12:40 | tomorrow's (Taipei) eligible games with the latest prediction; one per day; nothing when there are no games |
+| `notify_system_alerts` | :04 / :19 / :34 / :49 | `run_production_check --post-deploy` FAIL set: message when it changes (new / recovered), reminder every 6 h while unchanged; skipped for the first 15 min after a (re)start. If the DB itself is unreachable the alert is sent directly with in-process de-duplication. |
+
+Setup: 1) `npm run db:migrate:pg` (applies 0009); 2) set the variables on Railway (§2); 3) from your laptop `cd pipeline && .venv/bin/python run_notify.py --test`. Inspect without sending: `run_notify.py --job actionable|daily|system --dry-run`.
+
+Delivery: every message is claimed in `notification_events` (`dedup_key` UNIQUE) before sending, so a duplicate replica cannot double-send; a failed send is kept as `failed` and retried up to 3 times. Heartbeat: `data_sources.notify_telegram` (status page category 推播). The token is never logged or stored.
+
+Limits: the scheduler cannot alert about itself being down (no process, no message) — use an external uptime monitor if needed. Multiple website users need `TELEGRAM_NOTIFY_USER_ID` (one chat ↔ one user).
+
 ## 5. States
 
 | State | Meaning | Action |
@@ -189,7 +207,7 @@ As-of semantics: snapshot `fetched_at` = the HAR response completion time (`star
 - **Model artifact:** on Railway shell (or locally against the same dir) `python run_retrain.py --list`, then `python run_retrain.py --rollback` (previous) or `--rollback --to <version>`. Versions are immutable and never auto-deleted; `CURRENT.json` switches atomically. To discard a bad volume completely, delete `CURRENT.json` on the volume and redeploy — the bootstrap artifact is re-copied.
 - **Scheduler code:** Railway → Deployments → pick a previous deployment → Redeploy. Or `git revert` on `main` (do not move tag `phase-d5-complete`).
 - **Website:** Cloudflare Pages → Deployments → previous deployment → Rollback to this deployment.
-- **Database:** migrations are forward-only; `0001–0008` are applied. Use the pre-0008 backup only for disasters, never as routine.
+- **Database:** migrations are forward-only; `0001–0008` are applied (`0009` = Telegram push, apply when enabling §4c). Use the pre-0008 backup only for disasters, never as routine.
 
 ## 9. Readiness command reference
 
@@ -200,6 +218,7 @@ cd pipeline
 .venv/bin/python run_production_check.py --json          # machine readable
 .venv/bin/python run_data_audit.py                       # KEEP / REVIEW / SAFE TO REMOVE
 .venv/bin/python scheduler.py --print-next-runs          # next trigger per job
+.venv/bin/python run_notify.py --job system --dry-run     # Telegram alert that would be sent now (no send / write)
 ```
 
 All of these are read-only, never call The Odds API, and never print secrets.

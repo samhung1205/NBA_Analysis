@@ -14,7 +14,7 @@
     unknown: ['未知', 'text-slate-400', 'fa-circle-question', 'border-slate-800'],
   };
 
-  const CATEGORY = { stats: '數據', injury: '傷病', odds: '盤口', model: '模型' };
+  const CATEGORY = { stats: '數據', injury: '傷病', odds: '盤口', model: '模型', notify: '推播' };
 
   function card(s) {
     const [label, cls, icon, border] = HEALTH[s.health] || HEALTH.unknown;

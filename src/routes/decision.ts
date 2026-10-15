@@ -501,7 +501,15 @@ r.post('/bets/:id/correction', async (c) => {
   const db = await getDb(c.env)
   if (!(await dq.hasD5Schema(db))) return c.json({ error: 'migration 0008 未套用' }, 409)
   const id = Number(c.req.param('id'))
+  if (!Number.isInteger(id)) return c.json({ error: 'invalid bet id' }, 400)
   const body: any = await c.req.json().catch(() => ({}))
+  const requestId = typeof body.client_request_id === 'string' && /^[\w:-]{8,100}$/.test(body.client_request_id)
+    ? body.client_request_id : crypto.randomUUID()
+  const replay = await dq.getBetByRequest(db, user.uid, requestId)
+  if (replay) {
+    if (Number(replay.supersedes_bet_id) !== id) return c.json({ error: 'client_request_id_conflict' }, 409)
+    return c.json({ ok: true, id: Number(replay.id), supersedes_bet_id: id, replay: true, bet: shapeBet(replay) })
+  }
   const old = await dq.getBetForUser(db, id, user.uid)
   if (!old) return c.json({ error: '找不到該筆紀錄' }, 404)
   if ((old.record_status ?? 'active') !== 'active') return c.json({ error: `此紀錄已 ${old.record_status}` }, 409)
@@ -513,15 +521,31 @@ r.post('/bets/:id/correction', async (c) => {
   const selection = body.selection ? String(body.selection) : old.selection
   if (!(Number.isFinite(odds) && odds > 1) || !(Number.isFinite(stake) && stake > 0))
     return c.json({ error: '更正後的 odds 須 > 1、stake 須 > 0' }, 400)
-  if (!VALID_SELECTIONS.includes(selection)) return c.json({ error: 'selection 不合法' }, 400)
+  if (!VALID_SELECTIONS.includes(selection) || (selection === 'draw' && old.market !== 'h1_ml'))
+    return c.json({ error: 'selection 不合法（draw 只用於上半場三向）' }, 400)
+  if (line != null && !Number.isFinite(line)) return c.json({ error: 'line 須為數字' }, 400)
   let placedAt = iso(old.placed_at)
   if (body.placed_at) {
     const t = new Date(String(body.placed_at))
     if (Number.isNaN(t.getTime())) return c.json({ error: 'placed_at 須為 ISO8601 時間' }, 400)
+    if (t.getTime() > Date.now() + 5 * 60000) return c.json({ error: 'placed_at 不可在未來' }, 400)
     placedAt = t.toISOString()
   }
+  // 現有 Python 物化額度包含舊注單，沒有「移除舊單再納入更正值」的結果。
+  // 不在 TS 重算或把舊額度套到替代注單；明確確認後只記錄事實，合規狀態保守標 missing_context。
+  const check = {
+    checks: ['correction_not_revalidated'],
+    warnings: ['replacement_capacity_not_materialized'],
+    compliance: 'missing_context', requires_confirmation: true, requires_reason: true,
+    limits: {},
+  }
+  if (body.confirm_override !== true) {
+    return c.json({ error: 'confirmation_required',
+      message: '更正後的風險額度尚未重新驗證。確認後會記錄為 missing_context，不能沿用原注單的合規標記；Python 將重新計算實際 exposure。',
+      checks: check.checks, warnings: check.warnings, compliance_if_confirmed: check.compliance,
+      requires_reason: true, limits: check.limits }, 409)
+  }
   const now = nowIso()
-  const requestId = crypto.randomUUID()
   const keep = (k: string) => (old[k] === undefined ? null : old[k])
   const canonicalChanged = selection !== old.selection || line !== num(old.line)
   const row: Record<string, unknown> = {}
@@ -536,7 +560,9 @@ r.post('/bets/:id/correction', async (c) => {
     comparator: canonicalChanged ? null : keep('comparator'),
     settlement_rule: canonicalChanged ? null : keep('settlement_rule'),
     reference_context: typeof old.reference_context === 'object' && old.reference_context ? JSON.stringify(old.reference_context) : keep('reference_context'),
-    risk_check: JSON.stringify({ skipped: 'correction', corrected_from: id, reason, evaluated_at: now }),
+    strategy_compliance: check.compliance,
+    risk_check: JSON.stringify({ ...check, corrected_from: id, reason, evaluated_at: now, confirmed: true }),
+    override_reason: reason, override_confirmed_at: now,
   })
   const account = await dq.getAccount(db, user.uid)
   const steps = [] as { sql: string; params?: unknown[] }[]
@@ -556,6 +582,9 @@ r.post('/bets/:id/correction', async (c) => {
   try {
     await db.atomic(steps)
   } catch (e) {
+    const again = await dq.getBetByRequest(db, user.uid, requestId)
+    if (again && Number(again.supersedes_bet_id) === id)
+      return c.json({ ok: true, id: Number(again.id), supersedes_bet_id: id, replay: true, bet: shapeBet(again) })
     console.warn('bet correction conflict', (e as Error)?.message)
     return c.json({ error: 'risk_state_changed', message: '另一個請求剛更新了紀錄，請重新整理後再試。' }, 409)
   }
@@ -670,7 +699,7 @@ r.post('/bankroll/entries', async (c) => {
     const risk = riskStateOf(snap, { accountVersion: num(account.risk_state_version), ledgerMax,
       eventMax: await dq.getUserEventMax(db, user.uid), now: Date.now() })
     const available = num(snap?.bankroll?.available_bankroll)
-    if (!snap || risk.status === 'recalculation_pending' || available == null)
+    if (!snap || !risk.capacity_valid || available == null)
       return c.json({ error: 'recalculation_pending', message: 'bankroll 尚在重新計算，請約一分鐘後再試（不以過期餘額判斷出金）' }, 409)
     if ((amount as number) > available)
       return c.json({ error: 'exceeds_available_bankroll', message: '出金金額大於可用 bankroll（已扣除未結算 stake）', available_bankroll: available }, 409)

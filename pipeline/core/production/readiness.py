@@ -240,6 +240,23 @@ def check_scheduler_definition(now: datetime) -> list[Check]:
     return out
 
 
+def classify_notify(token_set: bool, chat_set: bool, table_ready: bool | None) -> tuple[str, str]:
+    """E.1 Telegram 推播（選用）：未設定 = WAITING；設定了但 0009 未套用 = WARN（推播 job 不會送任何訊息）。"""
+    if not (token_set or chat_set):
+        return WAITING, "未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID（選用；不推播）"
+    if not (token_set and chat_set):
+        return WARN, "TELEGRAM_BOT_TOKEN 與 TELEGRAM_CHAT_ID 需同時設定"
+    if table_ready is False:
+        return WARN, "已設定，但資料庫尚未套用 0009_phase_e1_notifications.sql（npm run db:migrate:pg）"
+    return PASS, "已設定（ACTIONABLE / 每日摘要 / 系統告警）"
+
+
+def check_notify(cur, env: dict[str, str]) -> list[Check]:
+    ready = bool(_val(cur, "SELECT to_regclass('notification_events') IS NOT NULL"))
+    st, d = classify_notify(bool(env.get("TELEGRAM_BOT_TOKEN")), bool(env.get("TELEGRAM_CHAT_ID")), ready)
+    return [Check("notify", "telegram", st, d)]
+
+
 def check_database(cur, now: datetime) -> list[Check]:
     out: list[Check] = []
     out.append(Check("database", "reachable", PASS, "SELECT 1 OK（read-only transaction）"))
@@ -417,7 +434,8 @@ def run_checks(*, post_deploy: bool = False, now: datetime | None = None, env: d
                              ("heartbeats", lambda: check_heartbeats(cur, now, post_deploy)),
                              ("odds", lambda: check_odds(cur, now, env, post_deploy)),
                              ("efficiency", lambda: check_efficiency(cur, now, artifact_root)),
-                             ("pipeline", lambda: check_pricing_to_evidence(cur, now))):
+                             ("pipeline", lambda: check_pricing_to_evidence(cur, now)),
+                             ("notify", lambda: check_notify(cur, env))):
                 out += _guard(name, name, fn)
                 if conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
                     conn.rollback()

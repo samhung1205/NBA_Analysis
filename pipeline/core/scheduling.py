@@ -56,6 +56,8 @@ def job_specs() -> list[JobSpec]:
     from .sizing.job import pricing_and_sizing_scheduled
     from .execution.ledger import paper_strategy_scheduled
     from .decision.job import decision_board_scheduled
+    from .notify.job import (notify_actionable_scheduled, notify_daily_summary_scheduled,
+                             notify_system_alerts_scheduled)
     from .config import settings
 
     return [
@@ -111,6 +113,19 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(minute="*", second=30, timezone=TPE),
                 "每分鐘（:30 秒）：實際注單 settle-v1 → bankroll ledger 損益同步 → 每位使用者 × betting day 的 "
                 "decision board（台彩 D.3 理論機會 − 實際下注 exposure → 新增額度；內容不變只更新確認時間）"),
+        # ---- E.1：Telegram 推播（notify-v1；未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID → 立即返回） ---- #
+        JobSpec("notify_actionable", notify_actionable_scheduled,
+                CronTrigger(minute="*", second=50, timezone=TPE),
+                "每分鐘（:50 秒，decision_board 之後）：最新且新鮮的決策中心中新出現的台彩 ACTIONABLE 機會 → Telegram"
+                "（同一機會只通知一次；非投注建議）", startup_catchup=False),
+        JobSpec("notify_daily_summary", notify_daily_summary_scheduled,
+                CronTrigger(hour=12, minute=40, timezone=TPE),
+                "每日 12:40（台灣，early 預測之後）：台灣明日賽事與最新預測摘要 → Telegram（每天一則）",
+                startup_catchup=False),
+        JobSpec("notify_system_alerts", notify_system_alerts_scheduled,
+                CronTrigger(minute="4,19,34,49", timezone=TPE),
+                "每 15 分鐘：production readiness FAIL 集合有變化 → Telegram 告警 / 恢復通知（持續異常每 6 小時提醒）",
+                startup_catchup=False),
     ]
 
 

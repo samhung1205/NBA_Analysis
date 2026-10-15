@@ -56,6 +56,12 @@ class Settings:
     odds_api_quota_reserve: int = field(default=25)
     odds_api_quota_warn: int = field(default=100)
     odds_api_cron_hours: str = field(default="0,6,12,18")
+    # ---- Phase E.1 推播（Telegram；未設定 = 不推播） ---- #
+    telegram_bot_token: str | None = field(default=None)
+    telegram_chat_id: str | None = field(default=None)
+    telegram_notify_user_id: int | None = field(default=None)
+    notify_site_url: str | None = field(default=None)
+    telegram_notify_include_review: bool = field(default=False)
 
 
 def load_settings() -> Settings:
@@ -83,6 +89,11 @@ def load_settings() -> Settings:
         odds_api_quota_reserve=int(_env_float("ODDS_API_QUOTA_RESERVE", 25)),
         odds_api_quota_warn=int(_env_float("ODDS_API_QUOTA_WARN", 100)),
         odds_api_cron_hours=_env("ODDS_API_CRON_HOURS") or "0,6,12,18",
+        telegram_bot_token=_env("TELEGRAM_BOT_TOKEN") or None,
+        telegram_chat_id=_env("TELEGRAM_CHAT_ID") or None,
+        telegram_notify_user_id=int(_env("TELEGRAM_NOTIFY_USER_ID")) if _env("TELEGRAM_NOTIFY_USER_ID") else None,
+        notify_site_url=_env("NOTIFY_SITE_URL") or None,
+        telegram_notify_include_review=_env_bool("TELEGRAM_NOTIFY_INCLUDE_REVIEW", False),
     )
 
 
