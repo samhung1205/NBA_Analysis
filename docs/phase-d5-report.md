@@ -1,5 +1,7 @@
 # Phase D.5 — Decision Dashboard, Bets-Aware Exposure & Production Readiness 報告
 
+> 2026-10-15 後續：[免費資料來源與封鎖處理](data-source-access-2026-10-15.md) 已實測 NBA CDN / 官方裁判頁，並新增台彩 HAR 的完全離線檢查；本報告下方保留原驗收時間點的狀態。
+
 日期：2026-10-05　範圍：把 Prediction → Odds → No-vig / EV → Kelly sizing → T-60 paper decision → Settlement 整合成每天可操作的
 personal decision-support platform；**使用者真的已下注的 bets 納入同一個 risk-v1 預算**；決策中心 / 記錄下注 / strategy bankroll /
 evidence / system readiness。

@@ -7,6 +7,7 @@
 | 文件 | 用途 |
 |---|---|
 | [production-runbook.md](production-runbook.md) | **正式環境操作手冊**：Railway / Cloudflare 設定、每日維運、狀態判讀、台彩 HAR 匯入、回滾 |
+| [data-source-access-2026-10-15.md](data-source-access-2026-10-15.md) | 免費 NBA 來源實測、球員 / lineup / 旅行 / 裁判邊界、台彩離線 HAR 檢查與匯入 |
 | [../DEPLOY.md](../DEPLOY.md) | 部署平台選型評估（2026-10-05；部分數字如 job 數、PBKDF2 迭代數已被 runbook 更新） |
 
 ## 現況與稽核（Status）

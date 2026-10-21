@@ -87,6 +87,40 @@ Do **not** deploy before the account cleanup in §6 is done. `npm run deploy:pro
 
 Auth model: `/api/decision-board`, `/api/bets*`, `/api/bankroll*` call `requireUser`; games / odds / sizing / predictions / system status are public by design (no personal data).
 
+### 3a. Supabase Data API 安全邊界（2026-10-21）
+
+網站使用自訂 session；Hono 與 Python 均以 `DATABASE_URL` 直接連 Postgres，不使用 Supabase Auth / REST / GraphQL。網站的 `requireUser` **不會保護** Supabase 自動產生的 Data API。2026-10-21 唯讀確認通知所指的正式庫：33 張表未啟用 RLS；`anon` / `authenticated` 對 33 張表與 `v_odds_quotes` 均有讀寫權限。這證實授權缺口存在，**不能據此判定是否曾遭他人讀取或修改**。
+
+`migrations/postgres/0010_data_api_lockdown.sql` 是針對這個架構的修正：
+
+- 對目前 schema 的所有資料表（含 `schema_migrations`）啟用 RLS，不新增對外開放 policy。
+- 撤銷 `PUBLIC`、`anon`、`authenticated` 的表、個別欄位、序號與函式權限，並將 `v_odds_quotes` 改用 `security_invoker`，避免 view 以 owner 權限繞過 RLS。
+- 撤銷 migration 執行者在該 schema 新建表／序號時自動授予 API 角色的權限。**新 migration 仍須明確啟用新表 RLS**；其他 creator 的 default privileges 要另外審查。
+- 固定現有六個 trigger 函式的 `search_path=pg_catalog`，保留投注及帳本的不可變性檢查。
+
+現行後端使用 `postgres`（`BYPASSRLS`），不受這些 RLS policy 限制；權限不可移交給瀏覽器。未來若改成其他 DB role，須先驗證直接 SQL 的權限／RLS，不能為恢復服務把資料開放給 `anon`。D1 沒有 Supabase Data API，不套用 0010。
+
+正式套用前須獲授權、確認目標及既有 migration 狀態。使用同一個 migration 交易提交修正與版本紀錄，不重跑 seed，不修改或刪除業務資料。以當下檢查結果確認是否已套用：
+
+```bash
+cd pipeline
+.venv/bin/python run_security_check.py
+# PASS：所有表已啟用 RLS，API 角色無有效表／欄位／序號／函式權限，
+# users / bets / bankroll_ledger / v_odds_quotes 的 8 次角色讀取測試皆被拒絕。
+```
+
+此命令為唯讀，僅輸出結構診斷；角色探測用 `LIMIT 0`，不傳回使用者資料。它驗證 Postgres 授權邊界，不代表已完成 HTTP Data API、Supabase Advisor 或存取紀錄的檢查。通知可能是過去的快照，修正後請重新執行 Dashboard Security Advisor。
+
+防止意外重新開放：Dashboard → Integrations → Data API 可停用未使用的 Data API（[官方說明](https://supabase.com/docs/guides/api/securing-your-api#disable-the-data-api)）；此設定與 SQL migration 分開，是否停用須以 Dashboard 為準。新函式仍可能繼承 PostgreSQL 的全域 `PUBLIC EXECUTE` 預設，須在建立函式的同一交易明確 `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated`；0010 不修改整個資料庫的全域 default privileges 或其他 Supabase schema。
+
+隔離回歸：`cd pipeline && .venv/bin/python -m pytest -q tests/test_data_api_security_db.py tests/test_decision_db.py tests/test_execution_db.py tests/test_notify_db.py`。fixture 只對隨機 schema 套用 migration；0010 使用 `current_schema()`，不可改成硬編碼 `public`。失敗時修正 migration／後端角色，**不要以停用 RLS 或重新開放 API 權限作為例行回滾**。
+
+2026-10-21 修正驗證：隔離 schema 的初版資安測試與既有 decision / execution / notify 共 **33 passed**；補齊個別欄位授權案例與唯讀稽核工具後，最終資安專項 **5 passed**（包含修正前可讀、修正後拒絕、後端仍可讀寫、重跑與新表／序號 default privileges）。Python 語法檢查及 `git diff --check` 通過。正式庫修正前唯讀稽核為 **FAIL：33 張表未啟用 RLS、8 次角色讀取皆未遭拒絕**。
+
+**正式套用完成（2026-10-21，經使用者明確授權）**：已確認通知中的專案與既有 0001–0009 紀錄，在單一交易內套用 0010、驗證通過並寫入 `schema_migrations`，提交後以全新唯讀連線再驗證 **PASS：33 張表、1 個 view、8 次角色讀取全部遭拒絕、problems=[]**。後端帳號對所有 33 張表的 SELECT / INSERT / UPDATE / DELETE 權限均保留，8 個表／view 的後端讀取探測通過；六個 trigger 函式 search path 已固定。`decision_board`、`market_pricing`、`bet_sizing`、`paper_strategy`、`notify_telegram` 最近心跳均為 `ok`（檢查時 0–4 分鐘內）。已發送 PostgREST schema reload 通知；未修改或刪除業務資料，也未部署網站／排程程式。
+
+套用檔案 SHA-256：`34e2402143e7e37566f8ba7f212e9780799e6d3758128f61e3bc4b6eb397bc6e`。尚未驗證 HTTP Data API 與 Dashboard Advisor；本機未設定正式網站 URL，未執行網站 HTTP smoke。Postgres 權限修正已實測生效，但不能據此判定修正前是否曾有資料外洩。
+
 ## 4. Daily operations
 
 - Look at `python run_production_check.py` (or the website status page) once a day.
@@ -190,17 +224,22 @@ Suggested order (run in the Supabase SQL editor; each block is rolled back until
 
 Automatic scraping is blocked by Cloudflare; this project does not circumvent it.
 
-1. Normal Chrome → open the Taiwan Sports Lottery NBA page → DevTools → Network → let the NBA odds load → right-click → **Save all as HAR with content** → save to `pipeline/captures/` (git/docker-ignored; `*.har` is ignored everywhere).
-2. Validate + dry-run (writes nothing):
+1. Normal Chrome → DevTools → Network → load the NBA league and each relevant game's full-game / first-half markets → **Export HAR (sanitized)**, including response content → save to `pipeline/captures/` (git/docker-ignored; `*.har` is ignored everywhere). Cookies / Authorization are not required; [Chrome's export reference](https://developer.chrome.com/docs/devtools/network/reference/#save-as-har) explains the sanitized export.
+2. Offline inspection (no DB / `.env` access; shows market coverage and per-game capture windows):
    ```bash
-   cd pipeline && .venv/bin/python run_twsport_har.py captures/<file>.har
+   cd pipeline
+   .venv/bin/python run_twsport_har.py captures/<file>.har --inspect
    ```
-3. Import, then shred the file (HAR contains cookies / tokens):
+3. DB matching dry-run (reads the configured DB, writes nothing):
+   ```bash
+   .venv/bin/python run_twsport_har.py captures/<file>.har
+   ```
+4. After confirming the target DB and matching, import, then shred the file (HAR may still contain sensitive data):
    ```bash
    .venv/bin/python run_twsport_har.py captures/<file>.har --import --delete-after
    ```
 
-As-of semantics: snapshot `fetched_at` = the HAR response completion time (`startedDateTime + time`), never the import time. The paper strategy (execution-v1, T = tip-off − 60 min) only reads `fetched_at ≤ T`, so a HAR captured after T cannot influence that game's decision. Capture shortly before T, import promptly; HARs older than 2 h are refused unless `--allow-stale` (still stored with the true capture time). Timestamps in the future are rejected. The tool prints counts only, never headers or bodies.
+As-of semantics: snapshot `fetched_at` = the HAR response completion time (`startedDateTime + time`), never the import time. The paper strategy (execution-v1, T = tip-off − 60 min) only reads `fetched_at ≤ T`, so a HAR captured after T cannot influence that game's decision. Taiwan's risk-v1 quote-age limit is 60 min at T, making the capture window tip-off − 120 min through tip-off − 60 min. Capture shortly before T and import promptly, preferably before T. HARs older than 2 h are refused unless `--allow-stale` (still stored with the true capture time); that flag never overrides the decision cutoff or quote-age guard. `--inspect` can diagnose an old capture but does not certify DB matching, paper eligibility or actionable status. Future timestamps beyond the existing five-minute clock tolerance are rejected. The tool never prints headers or bodies. See [source access details](data-source-access-2026-10-15.md).
 
 ## 8. Rollbacks
 

@@ -2,8 +2,9 @@
 """
 台灣運彩 HAR 手動匯入（合規備援；不繞過 Cloudflare）
 ------------------------------------------------------------
-流程：一般 Chrome 開台彩 NBA 頁面 → DevTools → Network → Save all as HAR with content
+流程：一般 Chrome 開台彩 NBA 頁面 → DevTools → Network → Export HAR (sanitized)，需含回應內容
       → python run_twsport_har.py capture.har            （預設：驗證 + dry-run，不寫 DB）
+      → python run_twsport_har.py capture.har --inspect  （完全離線，只解析與檢查時點，不讀 DB / .env）
       → python run_twsport_har.py capture.har --import   （確認無誤後才寫入）
       → 加 --delete-after：匯入成功後覆寫並刪除 HAR（HAR 內有 cookie / token）
 
@@ -12,7 +13,7 @@ as-of 語意（防洩漏）：
   execution-v1 在 T = 開賽 − 60 分只會用 fetched_at ≤ T 的快照；T 之後才擷取的 HAR 不會被當成 T 之前就存在。
   請在 HAR 擷取後盡快匯入，且擷取時機要在 T 之前才有用（T 之後的擷取只會是 stale / 盤中，不會進決策）。
 
-安全：HAR 可能含 cookie / Authorization；本工具絕不印出 header / cookie / body，只印統計。
+安全：HAR 可能含 cookie / Authorization；本工具不印出 header / cookie / body，只印摘要與公開賽事時點。
       *.har 已列入 .gitignore 與 .dockerignore；不要 commit、不要貼到聊天。
 """
 from __future__ import annotations
@@ -21,11 +22,46 @@ import argparse
 import json
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SENSITIVE_HEADERS = {"cookie", "authorization", "set-cookie", "x-csrf-token", "x-auth-token"}
 STALE_WARN = timedelta(hours=2)
+
+
+def inspect_capture(raw: dict, fetched_at: datetime, *, now: datetime) -> dict:
+    """只查解析／擷取時點，不宣稱已比對 NBA game、定價、合規或已入庫。"""
+    from core.odds import twsport
+    from core.odds.canonical import OPEN
+    from core.execution.policy import EXECUTION_V1
+    from core.sizing.policy import PRODUCTION_RISK_POLICY
+    from core.timeutil import TPE, ensure_utc
+
+    fetched_at, now = ensure_utc(fetched_at), ensure_utc(now)
+    parsed = twsport.parse_raw(raw)
+    max_age = PRODUCTION_RISK_POLICY.max_quote_age("twsport")
+    events = []
+    for ev in parsed.events:
+        tipoff = ensure_utc(ev.commence_utc)
+        cutoff = tipoff - EXECUTION_V1.decision_offset
+        start = cutoff - max_age
+        timing = ("captured_after_cutoff" if fetched_at > cutoff else
+                  "capture_too_early" if fetched_at < start else "timing_compatible")
+        events.append({"source_event_id": ev.source_event_id, "home": ev.home_name, "away": ev.away_name,
+                       "stage": ev.stage, "tipoff_tpe": tipoff.astimezone(TPE).isoformat(),
+                       "capture_window_start_tpe": start.astimezone(TPE).isoformat(),
+                       "decision_time_tpe": cutoff.astimezone(TPE).isoformat(), "capture_timing": timing,
+                       "decision_time_passed": now > cutoff,
+                       "markets": sorted(s.market for s in ev.snapshots),
+                       "missing_markets": sorted({"ml", "spread", "total", "h1_ml", "h1_spread", "h1_total"}
+                                                 - {s.market for s in ev.snapshots}),
+                       "open_markets": sorted(s.market for s in ev.snapshots if s.status == OPEN),
+                       "invalid_markets": len(ev.invalid)})
+    return {"mode": "offline_parse_only", "database_accessed": False,
+            "fetched_at": fetched_at.isoformat(), "older_than_import_limit": now - fetched_at > STALE_WARN,
+            "n_events": len(parsed.events), "n_markets": parsed.n_snapshots, "n_invalid": parsed.n_invalid,
+            "events": events,
+            "note": "僅檢查內容與時間；不是 actionable 或匯入成功證明。正式 NBA 對戰比對及資格由既有匯入／決策流程檢查。"}
 
 
 def sensitive_entry_count(har: dict) -> int:
@@ -52,9 +88,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("har", help="DevTools 匯出的 .har 檔")
     ap.add_argument("--import", dest="do_import", action="store_true", help="實際寫入資料庫（預設只驗證 + dry-run）")
+    ap.add_argument("--inspect", action="store_true", help="完全離線解析、玩法覆蓋與 T-60 時點檢查；不讀 DB / .env")
     ap.add_argument("--delete-after", action="store_true", help="成功匯入後覆寫並刪除 HAR")
     ap.add_argument("--allow-stale", action="store_true", help=f"允許擷取時間距今超過 {STALE_WARN}（仍保留原擷取時間，不會冒充現在）")
     args = ap.parse_args()
+    if args.inspect and (args.do_import or args.delete_after):
+        ap.error("--inspect 不可搭配 --import / --delete-after")
     if args.delete_after and not args.do_import:
         sys.exit("--delete-after 只能搭配 --import")
 
@@ -65,7 +104,6 @@ def main() -> int:
     setup_logging()
     from core.odds import twsport
     from core.odds.errors import OddsSourceError
-    from core.odds.ingest import run_odds_job
     from core.timeutil import now_utc
 
     try:
@@ -84,9 +122,18 @@ def main() -> int:
     now = now_utc()
     age = now - fetched_at
     print(f"擷取時間（回應完成，UTC）：{fetched_at.isoformat()}   距今 {age.total_seconds() / 60:.0f} 分鐘")
+    if args.inspect:
+        try:
+            summary = inspect_capture(raw, fetched_at, now=now)
+        except OddsSourceError as e:
+            sys.exit(f"HAR 解析失敗：{e}")
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0 if summary["n_markets"] else 1
     if age > STALE_WARN and not args.allow_stale:
         sys.exit(f"HAR 已超過 {STALE_WARN}；舊資料對 T-60 決策沒有價值。若仍要記錄請加 --allow-stale"
                  "（會以原擷取時間寫入，不會當成現在）")
+
+    from core.odds.ingest import run_odds_job
 
     def fetch(_rep, raw=raw):
         return raw

@@ -61,6 +61,7 @@
 - **網站（Stage 1）**：`src/`，Hono + TypeScript，部署在 Cloudflare Pages。網站只負責顯示與記錄，不做任何機率或風控運算。
 - **資料與模型引擎（Stage 2）**：`pipeline/`，Python。所有預測、去水、Kelly、風控、結算都在這裡計算並寫入資料庫。
 - **資料庫**：正式環境用 Supabase Postgres；本機開發可用 Cloudflare D1（SQLite）。
+- **Supabase 資料存取安全**：後端直接連 Postgres；公開 Data API 不供本專案使用。RLS 與 API 權限修正、唯讀檢查方式見 [維運手冊 §3a](docs/production-runbook.md#3a-supabase-data-api-安全邊界2026-10-21)。
 
 ## 3. 開始使用：帳號與登入
 
@@ -163,17 +164,22 @@
 台彩網站以 Cloudflare 防護，自動化擷取會被擋，本專案**不繞過**，改用一般瀏覽器手動匯出：
 
 1. 用一般 Chrome 打開台彩 NBA 頁面 → 開啟 DevTools → **Network** 分頁 → 等 NBA 盤口載入。
-2. 在 Network 清單按右鍵 → **Save all as HAR with content**，存到 `pipeline/captures/`（已被 git 忽略）。
-3. 驗證（不寫入）：
+2. 在單場詳情開啟全場與上半場玩法，等回應完成後選 **Export HAR (sanitized)**，存到 `pipeline/captures/`（已被 git 忽略）。需保留回應內容，不需要匯出 Cookie / Authorization。
+3. 完全離線檢查（不讀 DB / `.env`；逐場列出玩法與 T-60 擷取時間窗）：
    ```bash
-   cd pipeline && .venv/bin/python run_twsport_har.py captures/<檔名>.har
+   cd pipeline
+   .venv/bin/python run_twsport_har.py captures/<檔名>.har --inspect
    ```
-4. 匯入並刪除檔案（HAR 內含 cookie / token，務必刪除）：
+4. 對照預定 DB 做 dry-run（會讀 DB，不寫入）：
    ```bash
-   cd pipeline && .venv/bin/python run_twsport_har.py captures/<檔名>.har --import --delete-after
+   .venv/bin/python run_twsport_har.py captures/<檔名>.har
+   ```
+5. 確認目標 DB 與對戰比對後匯入，並刪除 HAR：
+   ```bash
+   .venv/bin/python run_twsport_har.py captures/<檔名>.har --import --delete-after
    ```
 
-注意：盤口時間以 HAR 實際擷取時間為準；超過 2 小時的 HAR 預設拒絕匯入。詳見 [production-runbook.md](docs/production-runbook.md) §7。
+注意：盤口時間以 HAR 實際擷取時間為準；超過 2 小時預設拒絕匯入，但 **T-60 策略還要求擷取在開賽前 120～60 分鐘，且盡快匯入、建議在 T-60 前完成**。`--inspect` 成功只代表可解析，不代表 actionable。詳見 [資料來源處理方案](docs/data-source-access-2026-10-15.md) 與 [production-runbook.md](docs/production-runbook.md) §7。
 
 ## 7. 名詞解釋
 
@@ -308,8 +314,11 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 |---|---|
 | `run_production_check.py [--post-deploy] [--json]` | 系統健康檢查（唯讀） |
 | `run_data_audit.py` | 帳號與資料稽核（唯讀） |
+| `run_security_check.py` | Supabase RLS、Data API 有效權限與角色拒絕測試（唯讀） |
 | `scheduler.py --print-next-runs` | 各排程下次執行時間 |
 | `run_twsport_har.py <file> [--import --delete-after]` | 台彩 HAR 驗證 / 匯入 |
+| `run_twsport_har.py <file> --inspect` | 完全離線解析、缺少玩法及逐場 T-60 時點檢查 |
+| `run_source_check.py [--game-id <已知歷史場次>]` | 免費 NBA CDN / 官方裁判頁唯讀檢查，不讀 DB |
 | `run_predict.py --kind early\|final\|refresh [--dry-run]` | 手動產生預測 |
 | `run_retrain.py [--list \| --rollback [--to <版本>]]` | 重訓 / 版本清單 / 回滾模型 |
 | `run_odds.py --source oddsapi [--dry-run]` | 手動抓國際盤 |
@@ -368,6 +377,8 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 
 - 已於本機實作與測試，**尚未部署**；正式資料庫尚未套用 `0009_phase_e1_notifications.sql`。
 - Phase E 其餘項目：line movement 需先累積真實盤口；球員 / lineup、旅行、裁判屬研究題目，尚未開始。
+
+資料來源前置檢查已補上：NBA CDN 與獨立官方裁判頁在本機可讀，不必把這些功能全部綁在 stats.nba.com；五人 lineup 重建與新特徵仍待研究。見 [免費來源與台彩手動匯入方案](docs/data-source-access-2026-10-15.md)。
 
 **使用限制**
 

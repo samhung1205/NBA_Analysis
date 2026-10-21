@@ -2,6 +2,8 @@
 
 狀態：**本機已實作與驗證，尚未部署**；正式資料庫尚未套用 `0009_phase_e1_notifications.sql`。
 
+> 資料來源判斷後續更新：[免費來源實測與封鎖處理](data-source-access-2026-10-15.md)。球員基本資料、旅行與裁判不必全部依賴 stats.nba.com；CDN 五人 lineup 重建仍待獨立驗證。下表保留當時選擇推播的背景。
+
 ## 1. 範圍與取捨
 
 規格書 Phase E 有三項選做：球員 / lineup / 旅行 / 裁判、line movement、Telegram/LINE 推播。本次只做推播，原因：
