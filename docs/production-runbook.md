@@ -5,7 +5,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
 ```
  Cloudflare Pages (Hono web + API + auth)  ──reads/writes──▶  Supabase Postgres (Session pooler, port 5432)
                                                                       ▲
- Railway "nba-scheduler" (Python, 16 jobs, always on, game-aware — §4b) ────────────────┘
+ Railway "nba-scheduler" (Python, 17 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
  The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — manual HAR import)
 ```
@@ -56,10 +56,10 @@ First boot logs (Deploy logs):
 [entrypoint] MODEL_ARTIFACT_DIR=/data/model-artifacts
 [entrypoint] No persistent production artifact found; bootstrapping...
 [entrypoint] Bootstrap artifact copied.
-... 已登錄 job：<id> — ...     (16 lines)
+... 已登錄 job：<id> — ...     (17 lines)
 ```
 
-Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured).
+Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured), `referee_assignments` (§4d).
 
 1. **Stays alive** – no restart loop; log lines keep arriving every minute (`decision_board`).
 2. **Heartbeats / DB writes** – from your laptop (reads `pipeline/.env`, read-only):
@@ -180,6 +180,16 @@ Delivery: every message is claimed in `notification_events` (`dedup_key` UNIQUE)
 
 Limits: the scheduler cannot alert about itself being down (no process, no message) — use an external uptime monitor if needed. Multiple website users need `TELEGRAM_NOTIFY_USER_ID` (one chat ↔ one user).
 
+## 4d. Referee assignments (`referees-v1`, Phase E.2 — data collection only)
+
+Collects the official pre-game assignments (https://official.nba.com/referee-assignments/, published ≈ 09:00 ET) so a prospective as-of history exists. **Not used by `ml-v2.0`, pricing, sizing or any strategy.**
+
+- Job `referee_assignments`: Taipei 20:07–10:37 every 30 min (= 08:07–21:37 ET in both EDT and EST); does nothing (no HTTP request) unless an eligible not-yet-started game tips off within 16 h.
+- Storage: `referee_assignment_reports` (one row per distinct page content; same content only advances `last_seen_at`; a late swap adds a new row, old rows are never rewritten) and `referee_assignments` (per game, `game_id` matched by ET date + teams; unmatched rows keep `game_id NULL` + `match_status` and are re-matched after schedule sync). `observed_at` = response completion time, never the page date.
+- As-of rule for future research: officials known at T = the latest report with `observed_at ≤ T`. Post-game box-score officials must never be written here.
+- Failures (403 / changed page / missing officials) are recorded as heartbeat `error` on `data_sources.nba_referees`, nothing is stored, no retry / IP rotation. Empty table (not yet published) stores nothing. A page still dated yesterday is normal before 09:00 ET (warn only after 12:00 ET).
+- Requires migration `0011_phase_e2_referees.sql` (new tables have RLS enabled and API roles revoked, per §3a). Manual: `cd pipeline && .venv/bin/python run_referees.py --dry-run`.
+
 ## 5. States
 
 | State | Meaning | Action |
@@ -246,7 +256,7 @@ As-of semantics: snapshot `fetched_at` = the HAR response completion time (`star
 - **Model artifact:** on Railway shell (or locally against the same dir) `python run_retrain.py --list`, then `python run_retrain.py --rollback` (previous) or `--rollback --to <version>`. Versions are immutable and never auto-deleted; `CURRENT.json` switches atomically. To discard a bad volume completely, delete `CURRENT.json` on the volume and redeploy — the bootstrap artifact is re-copied.
 - **Scheduler code:** Railway → Deployments → pick a previous deployment → Redeploy. Or `git revert` on `main` (do not move tag `phase-d5-complete`).
 - **Website:** Cloudflare Pages → Deployments → previous deployment → Rollback to this deployment.
-- **Database:** migrations are forward-only; `0001–0008` are applied (`0009` = Telegram push, apply when enabling §4c). Use the pre-0008 backup only for disasters, never as routine.
+- **Database:** migrations are forward-only; `0001–0008` are applied (`0009` Telegram push, `0010` Data API lockdown, `0011` referee assignments). Use the pre-0008 backup only for disasters, never as routine.
 
 ## 9. Readiness command reference
 

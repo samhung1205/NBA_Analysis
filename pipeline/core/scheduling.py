@@ -56,6 +56,7 @@ def job_specs() -> list[JobSpec]:
     from .sizing.job import pricing_and_sizing_scheduled
     from .execution.ledger import paper_strategy_scheduled
     from .decision.job import decision_board_scheduled
+    from .jobs.referee_collect import referees_scheduled
     from .notify.job import (notify_actionable_scheduled, notify_daily_summary_scheduled,
                              notify_system_alerts_scheduled)
     from .config import settings
@@ -113,6 +114,11 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(minute="*", second=30, timezone=TPE),
                 "每分鐘（:30 秒）：實際注單 settle-v1 → bankroll ledger 損益同步 → 每位使用者 × betting day 的 "
                 "decision board（台彩 D.3 理論機會 − 實際下注 exposure → 新增額度；內容不變只更新確認時間）"),
+        # ---- E.2：賽前裁判分派（只累積資料；官方約 09:00 ET 公布，賽前可能換人 → 內容變了才新增 report） ---- #
+        JobSpec("referee_assignments", referees_scheduled,
+                CronTrigger(hour="0-10,20-23", minute="7,37", timezone=TPE),
+                "台灣 20:07–10:37 每 30 分鐘（= 美東 08:07–21:37，夏令 / 冬令取聯集）：今天還有未開賽的 eligible 比賽才抓官方裁判頁 → referee_assignment_reports"
+                "（observed_at = 實際取得時間；不接入模型）", startup_catchup=False),
         # ---- E.1：Telegram 推播（notify-v1；未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID → 立即返回） ---- #
         JobSpec("notify_actionable", notify_actionable_scheduled,
                 CronTrigger(minute="*", second=50, timezone=TPE),

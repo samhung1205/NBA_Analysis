@@ -22,7 +22,8 @@
 | D.5 | 決策中心 / 實際下注 exposure / strategy bankroll | ✅（2 個缺口已本機修正、待部署） | [phase-d5-report.md](phase-d5-report.md)、[修正報告](phase-d5-fixes-2026-10-15.md) |
 | 上線 | readiness 工具、HAR 匯入、auth fail-closed、scheduler-efficiency-v1 | ✅ | [production-runbook.md](production-runbook.md) |
 | E.1 | Telegram 推播：ACTIONABLE / 每日摘要 / 系統告警（notify-v1） | ✅ 本機完成，未部署 | [phase-e1-telegram-report.md](phase-e1-telegram-report.md) |
-| E（其餘） | 球員層級模型、旅行 / 裁判、line movement（選做） | 未開始 | — |
+| E.2 | 賽前裁判分派收集（referees-v1；只累積資料，不接模型） | ✅ 本機完成，未部署 | [phase-e2-referees-report.md](phase-e2-referees-report.md) |
+| E（其餘） | 旅行距離、五人 lineup / on-off、line movement（選做） | 未開始 | — |
 
 ## 1. 資料來源與排程（C.5A 後）
 

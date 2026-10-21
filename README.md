@@ -48,7 +48,7 @@
  NBA CDN / ESPN / 官方傷病 PDF ─┐
  台彩 HAR（手動）/ The Odds API ─┤
                                  ▼
-          Railway 排程器（Python，16 個 jobs，24 小時常駐）
+          Railway 排程器（Python，17 個 jobs，24 小時常駐）
           擷取 → 特徵 → 預測 → 定價 → 注碼 → paper → 決策物化 → 推播
                                  │ 讀寫
                                  ▼
@@ -319,6 +319,7 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 | `run_twsport_har.py <file> [--import --delete-after]` | 台彩 HAR 驗證 / 匯入 |
 | `run_twsport_har.py <file> --inspect` | 完全離線解析、缺少玩法及逐場 T-60 時點檢查 |
 | `run_source_check.py [--game-id <已知歷史場次>]` | 免費 NBA CDN / 官方裁判頁唯讀檢查，不讀 DB |
+| `run_referees.py [--dry-run] [--force]` | 抓官方裁判分派並比對賽事；`--dry-run` 不寫入 |
 | `run_predict.py --kind early\|final\|refresh [--dry-run]` | 手動產生預測 |
 | `run_retrain.py [--list \| --rollback [--to <版本>]]` | 重訓 / 版本清單 / 回滾模型 |
 | `run_odds.py --source oddsapi [--dry-run]` | 手動抓國際盤 |
@@ -348,10 +349,10 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 │   ├── core/execution/   paper strategy、結算
 │   ├── core/decision/    決策中心、實際下注 exposure、bankroll
 │   ├── core/notify/      Telegram 推播（Phase E.1）
-│   ├── core/scheduling.py  16 個排程 job 定義
+│   ├── core/scheduling.py  17 個排程 job 定義
 │   ├── scheduler.py      排程器入口
 │   └── run_*.py          各項手動指令
-├── migrations/postgres/  正式 schema（0001–0009，權威版）
+├── migrations/postgres/  正式 schema（0001–0011，權威版）
 ├── migrations/d1/        本機 D1 schema
 ├── seed/                 本機測試資料樣板
 ├── scripts/              migration、seed、測試腳本
@@ -360,25 +361,18 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 
 ## 13. 目前狀態與已知限制
 
-**現況（2026-10-15）**
+**現況（2026-10-21）**
 
-- Phase A ~ D.5 已完成；正式資料庫 migrations 0001–0008 已套用，Railway 排程器已運作。
-- Cloudflare 網站的線上部署版本尚未在稽核中直接驗證。
-- 2026-27 例行賽首場為台灣時間 **10/21 03:00**；排程只同步到「台灣明日」為止，因此在那之前正式資料庫沒有未來賽事屬正常。
-- 正式資料庫目前盤口、定價、paper 與實際下注皆為 0 筆，**整條流程尚待第一批真實賽事驗證**。
+- Phase A ~ D.5、E.1 已完成並部署：正式資料庫 migrations 0001–0010 已套用，Railway 排程器與 Cloudflare 網站皆為 `e30c824` 之後的版本（2026-10-15 確認）。
+- 2026-27 例行賽已開打（台灣 10/21 03:00）。10/21 唯讀檢查：3 場已結束、ml-v2 預測 21 筆、國際盤快照 634 筆、每日摘要已送出 2 則。
+- **台彩盤口仍為 0 筆**（尚未匯入 HAR），所以 paper decision 全是 `no_bet / no_odds`、決策中心沒有可操作機會；完整的台彩流程仍待第一次 HAR 匯入後驗證。
+- D.5 更正 / 出金修正已隨網站部署（[phase-d5-fixes-2026-10-15.md](docs/phase-d5-fixes-2026-10-15.md)）；Supabase Data API 已鎖定（0010，見 runbook §3a）。
 
-**D.5 修正狀態**（詳見 [phase-d5-fixes-2026-10-15.md](docs/phase-d5-fixes-2026-10-15.md)）
+**Phase E 進度**
 
-- **P1 已於本機修正**：更正要求明確確認並標為 `missing_context`，保留稽核、原子取代與重送保護。
-- **P2 已於本機修正**：資金「提出」遇到過期、版本不一致或尚未物化的摘要一律回 409。
-- 本次修正尚未部署；線上仍以實際部署版本為準。稽核原始發現保留在 [project-audit-2026-10-15.md](docs/project-audit-2026-10-15.md)。
-
-**Phase E.1 Telegram 推播**（詳見 [phase-e1-telegram-report.md](docs/phase-e1-telegram-report.md)）
-
-- 已於本機實作與測試，**尚未部署**；正式資料庫尚未套用 `0009_phase_e1_notifications.sql`。
-- Phase E 其餘項目：line movement 需先累積真實盤口；球員 / lineup、旅行、裁判屬研究題目，尚未開始。
-
-資料來源前置檢查已補上：NBA CDN 與獨立官方裁判頁在本機可讀，不必把這些功能全部綁在 stats.nba.com；五人 lineup 重建與新特徵仍待研究。見 [免費來源與台彩手動匯入方案](docs/data-source-access-2026-10-15.md)。
+- **E.1 Telegram 推播**：已上線（[phase-e1-telegram-report.md](docs/phase-e1-telegram-report.md)）。
+- **E.2 賽前裁判分派收集**：本機完成，**尚未部署**；需套用 `0011_phase_e2_referees.sql`。只累積資料，不接入模型（[phase-e2-referees-report.md](docs/phase-e2-referees-report.md)）。
+- 尚未開始：旅行距離特徵（可做）、line movement（需累積數月盤口）、五人 lineup / on-off（大型研究）。來源可行性見 [data-source-access-2026-10-15.md](docs/data-source-access-2026-10-15.md)。
 
 **使用限制**
 

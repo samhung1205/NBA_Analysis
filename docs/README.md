@@ -36,6 +36,7 @@
 | [phase-d4-report.md](phase-d4-report.md) | 策略執行、結算、paper ledger |
 | [phase-d5-report.md](phase-d5-report.md) | 決策中心、實際下注 exposure、bankroll |
 | [phase-e1-telegram-report.md](phase-e1-telegram-report.md) | Telegram 推播（notify-v1）：ACTIONABLE、每日摘要、系統告警 |
+| [phase-e2-referees-report.md](phase-e2-referees-report.md) | 賽前裁判分派收集（referees-v1）：as-of 版本化儲存、賽事比對、排程 |
 
 ## 參考（Reference）
 
