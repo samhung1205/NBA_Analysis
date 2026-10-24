@@ -405,7 +405,7 @@
       const win = my != null && opp != null && my > opp;
       return `<tr>
         <td class="text-xs text-slate-500">${NBA.tpe(game.date_utc).slice(0, 9)}</td>
-        <td class="text-xs">${isHome ? '主' : '客'} vs ${NBA.esc(oppTeam.abbr)}</td>
+        <td class="text-xs">${isHome ? '主' : '客'} vs ${NBA.esc(NBA.teamName(oppTeam))}</td>
         <td class="text-xs num">${my ?? '—'}-${opp ?? '—'}</td>
         <td class="text-xs font-semibold ${win ? 'text-green-400' : 'text-red-400'}">${my == null ? '—' : win ? 'W' : 'L'}</td>
       </tr>`;
@@ -426,7 +426,7 @@
       .map(
         (gm) => `<tr>
         <td class="text-xs text-slate-500">${NBA.tpe(gm.date_utc).slice(0, 9)}</td>
-        <td class="text-xs">${NBA.esc(gm.away.abbr)} @ ${NBA.esc(gm.home.abbr)}</td>
+        <td class="text-xs">${NBA.matchup(gm.away, gm.home)}</td>
         <td class="text-xs num">${gm.score.away ?? '—'} - ${gm.score.home ?? '—'}</td>
         <td class="text-xs num text-slate-400">${gm.score.home != null && gm.score.away != null ? gm.score.home + gm.score.away : '—'}</td>
       </tr>`
@@ -461,7 +461,7 @@
     const rows = d.injuries
       .map(
         (i) => `<tr>
-        <td class="text-xs">${NBA.esc(i.team_abbr || '—')}</td>
+        <td class="text-xs">${NBA.esc(NBA.teamName(i.team_abbr))}</td>
         <td class="text-xs">${NBA.esc(i.player_name || '—')}${i.is_starter ? ' <span class="text-[10px] text-amber-400">(主力)</span>' : ''}</td>
         <td>${NBA.statusBadge(i.status)}</td>
         <td class="text-xs text-slate-400">${NBA.esc(i.reason || '—')}</td>
@@ -487,7 +487,7 @@
       ['reb', '籃板'], ['ast', '助攻'], ['tov', '失誤'],
       ['pace', 'Pace'], ['off_rtg', 'ORtg'], ['def_rtg', 'DRtg'],
     ];
-    const head = d.team_game_stats.map((s) => `<th class="text-right">${NBA.esc(s.name_zh || s.abbr)}</th>`).join('');
+    const head = d.team_game_stats.map((s) => `<th class="text-right">${NBA.esc(NBA.teamName(s))}</th>`).join('');
     const rows = keys
       .map(
         ([k, label]) => `<tr><td class="text-xs text-slate-400">${label}</td>${d.team_game_stats

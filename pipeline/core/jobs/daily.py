@@ -95,20 +95,28 @@ def ingest_injury_rows(cur, rows: list[dict], report_utc: datetime, *, source: s
             game_id=_game_id_for(cur, gid_cache, e.team_id, e.game_date), status=e.status,
             reason=e.reason, source=source))
 
-    # 球員消失 → Available
+    # 球員消失 → Available。
+    # 名單同步（roster_synced_at）晚於該球員最後一筆傷病、且顯示他已不在那一隊（轉隊 / 被釋出）：
+    # 舊東家的報告不列他是理所當然，不能替他在舊東家寫一列 Available。
     submitted = {abbr for abbr, iso in team_first_date.items() if not parsed.coverage[iso][abbr].get("nys")}
     if submitted:
         cur.execute(
             """
-            SELECT DISTINCT ON (player_id) player_id, team_id, status FROM injuries
-             WHERE source = %s AND report_time_utc < %s AND player_id IS NOT NULL
-             ORDER BY player_id, report_time_utc DESC, id DESC
+            SELECT l.player_id, l.team_id, l.status,
+                   (p.roster_synced_at > l.report_time_utc AND p.team_id IS DISTINCT FROM l.team_id) AS left_team
+              FROM (
+                SELECT DISTINCT ON (player_id) player_id, team_id, status, report_time_utc FROM injuries
+                 WHERE source = %s AND report_time_utc < %s AND player_id IS NOT NULL
+                 ORDER BY player_id, report_time_utc DESC, id DESC
+              ) l
+              LEFT JOIN players p ON p.id = l.player_id
             """,
             (source, report_utc))
         abbr_by_id = {v: k for k, v in teams.abbr_to_id.items()}
         for r in cur.fetchall():
             abbr = abbr_by_id.get(r["team_id"])
-            if abbr not in submitted or r["status"] == "Available" or r["player_id"] in listed.get(abbr, set()):
+            if (abbr not in submitted or r["status"] == "Available" or r["left_team"]
+                    or r["player_id"] in listed.get(abbr, set())):
                 continue
             iso = team_first_date[abbr]
             written += int(insert_injury_if_changed(

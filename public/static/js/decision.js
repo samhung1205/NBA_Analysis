@@ -52,7 +52,7 @@
   };
   const sideText = (o, g) => {
     const s = o.side;
-    const name = s === 'home' ? (g.home.name_zh || g.home.abbr) : s === 'away' ? (g.away.name_zh || g.away.abbr)
+    const name = s === 'home' ? NBA.teamName(g.home) : s === 'away' ? NBA.teamName(g.away)
       : s === 'over' ? '大分' : s === 'under' ? '小分' : s === 'draw' ? '和局' : s;
     const line = o.display_line != null && o.market_type !== 'moneyline' ? ` ${o.market_type === 'spread' ? NBA.signed(o.display_line) : NBA.fixed(o.display_line)}` : '';
     return `${esc(name)}${line}`;
@@ -201,7 +201,7 @@
             <span>${esc(g.tipoff_display)}</span>${NBA.gameStatusBadge(g.game_status)}
           </div>
           <a href="/games/${g.game_id}" class="text-[15px] font-semibold hover:text-orange-300 truncate block">
-            ${esc(g.away.name_zh || g.away.abbr)} <span class="text-slate-600">@</span> ${esc(g.home.name_zh || g.home.abbr)}</a>
+            ${NBA.matchup(g.away, g.home)}</a>
         </div>
         <div class="shrink-0 text-right">${groups ? groupBadge(groups) : ''}</div>
       </header>
@@ -299,7 +299,7 @@
         <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-pen-to-square text-orange-400 mr-1.5"></i>記錄下注</h2>
         <p class="text-[11px] text-slate-500 mb-3">請先在台灣運彩完成下注，再填入<strong>實際成交</strong>的賠率與金額。平台不會替你下注。</p>
         <dl class="kv mb-3">
-          <div><dt>比賽</dt><dd>${esc(g.away.abbr)} @ ${esc(g.home.abbr)} · ${esc(g.tipoff_display)}</dd></div>
+          <div><dt>比賽</dt><dd>${NBA.matchup(g.away, g.home)} · ${esc(g.tipoff_display)}</dd></div>
           <div><dt>來源</dt><dd>台灣運彩（${esc(o.bookmaker)}）</dd></div>
           <div><dt>玩法 / 方向</dt><dd>${esc(MARKET[o.market] || o.market)} · ${sideText(o, g)}</dd></div>
           <div><dt>平台觀察賠率</dt><dd class="num">${NBA.odds(o.decimal_odds)}（${NBA.tpe(o.odds_fetched_at)}）</dd></div>

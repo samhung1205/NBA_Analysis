@@ -44,7 +44,7 @@
     const options = games
       .map(
         (g) =>
-          `<option value="${g.id}" ${String(g.id) === preselect ? 'selected' : ''}>${NBA.tpe(g.date_utc)} ${NBA.esc(g.away.abbr)} @ ${NBA.esc(g.home.abbr)}</option>`
+          `<option value="${g.id}" ${String(g.id) === preselect ? 'selected' : ''}>${NBA.tpe(g.date_utc)} ${NBA.esc(NBA.teamName(g.away))} @ ${NBA.esc(NBA.teamName(g.home))}</option>`
       )
       .join('');
 
@@ -172,7 +172,7 @@
       ? `<div class="text-[10px] text-slate-500">平台觀察 ${NBA.odds(b.reference_decimal_odds)}</div>` : '';
     return `<tr class="${active ? '' : 'opacity-50'}">
       <td class="text-xs text-slate-500 whitespace-nowrap">${NBA.tpe(b.placed_at).slice(0, 9)}<div class="text-[10px]">#${b.id}</div></td>
-      <td class="text-xs">${NBA.esc(b.away_name_zh || b.away_abbr)} @ ${NBA.esc(b.home_name_zh || b.home_abbr)}
+      <td class="text-xs">${NBA.esc(NBA.teamName(b.away_abbr))} @ ${NBA.esc(NBA.teamName(b.home_abbr))}
         ${b.game_status === 'final' ? `<span class="text-slate-500 num ml-1">(${b.away_pts}-${b.home_pts})</span>` : ''}
       </td>
       <td class="text-xs">${NBA.esc(label(MARKETS, b.market))}</td>

@@ -190,6 +190,18 @@ Collects the official pre-game assignments (https://official.nba.com/referee-ass
 - Failures (403 / changed page / missing officials) are recorded as heartbeat `error` on `data_sources.nba_referees`, nothing is stored, no retry / IP rotation. Empty table (not yet published) stores nothing. The page's date is the page's *current* ET date: before the new slate is published (≈ 09:00 ET) it still lists the previous slate labelled as today, so matching covers the page date and the day before; a fully previous-day match is `previous_slate` (normal). Idle runs also touch the heartbeat.
 - Requires migration `0011_phase_e2_referees.sql` (new tables have RLS enabled and API roles revoked, per §3a). Manual: `cd pipeline && .venv/bin/python run_referees.py --dry-run`.
 
+## 4e. Current rosters (`roster-sync-v1`, 2026-10-21)
+
+`players.team_id` used to follow only the player's latest box score, so off-season moves stayed on the old team until the first game (e.g. Klay Thompson DAL → MIA, Giannis MIL → MIA). The 2026-10-21 read-only dry-run against production found **107 moved, 69 new (rookies / signings), 585 no longer on any roster**.
+
+- Source: `stats.nba.com/stats/playerindex` (Active=1, NBA PERSON_ID → `nba_player_id`); falls back to ESPN team rosters (name-only: updates uniquely matched existing players, never adds or releases).
+- An incomplete roster (missing team, < 13 players on a team, unknown abbr) is rejected as a whole and recorded as heartbeat `error` on `data_sources.nba_rosters`; nothing is written.
+- Applied players get `roster_synced_at`; `refresh_player_current_team()` only overrides them after a later game. The injury "not listed → Available" row is no longer written on a team the player has left (per a newer roster sync).
+- Requires migration `0012_player_roster_sync.sql` (adds one column, no new table). Manual: `cd pipeline && .venv/bin/python run_roster_sync.py --dry-run`, then without `--dry-run` to apply.
+- Job `roster_sync`: daily Taipei 11:50 (= ET the previous night, after that day's transactions; before the 12:00 schedule sync and 12:20 early predictions). No startup catch-up (a restart does not hit stats.nba.com again). Heartbeat `data_sources.nba_rosters` expects 24 h; `warn` = some ESPN names unmatched, `error` = fetch failed / incomplete roster (nothing written).
+
+**Applied to production (2026-10-22 TPE, explicitly authorized by the user):** `0012_player_roster_sync.sql` applied alone in one transaction together with its `schema_migrations` row (`0011` was deliberately left unapplied — still in development — so `npm run db:migrate:pg` was not used). `run_roster_sync.py` applied 107 moves / 69 additions / 585 releases (source `nba_playerindex`, 0 unmatched); a dry-run right after showed 0 changes, 519 players on teams, heartbeat `nba_rosters` = `ok`. Klay Thompson and Giannis Antetokounmpo are now MIA. The website / scheduler code was not deployed.
+
 ## 5. States
 
 | State | Meaning | Action |
@@ -229,6 +241,16 @@ Suggested order (run in the Supabase SQL editor; each block is rolled back until
    ROLLBACK;   -- change to COMMIT after review
    ```
 3. Optional: stale `data_sources` rows `bbref`, `balldontlie`, `nba_api` (no job updates them). Harmless; they show as stale on the status page.
+4. Seed injury row (found 2026-10-21): `injuries.id = 9` is the seed's "Klay Thompson GSW Questionable" (report time 2026-08-01 03:30 UTC, created 2026-08-01 — no official report exists then). The real 2026-10-20 23:45 report then copied its GSW team into `id = 79` ("Available / Not listed on latest official report"), which is why the injury page showed Klay under GSW. Neither row exists in `injury_report_entries` (the as-of source used by models). Also from the seed: only 10 teams have `teams.name_zh` (the site no longer depends on it).
+   ```sql
+   BEGIN;
+   DELETE FROM injuries
+    WHERE id IN (9, 79) AND player_id = (SELECT id FROM players WHERE nba_player_id = 202691)
+      AND team_id = (SELECT id FROM teams WHERE abbr = 'GSW');
+   -- expect DELETE 2, then:
+   ROLLBACK;   -- change to COMMIT after review
+   ```
+   **Done 2026-10-22 TPE (user authorized):** exactly these 2 rows deleted; Klay has no remaining `injuries` rows, and none of the latest injury rows since 2026-10-20 TPE sit on a team different from the synced roster.
 
 ## 7. Taiwan Sports Lottery — manual HAR workflow
 
@@ -256,7 +278,7 @@ As-of semantics: snapshot `fetched_at` = the HAR response completion time (`star
 - **Model artifact:** on Railway shell (or locally against the same dir) `python run_retrain.py --list`, then `python run_retrain.py --rollback` (previous) or `--rollback --to <version>`. Versions are immutable and never auto-deleted; `CURRENT.json` switches atomically. To discard a bad volume completely, delete `CURRENT.json` on the volume and redeploy — the bootstrap artifact is re-copied.
 - **Scheduler code:** Railway → Deployments → pick a previous deployment → Redeploy. Or `git revert` on `main` (do not move tag `phase-d5-complete`).
 - **Website:** Cloudflare Pages → Deployments → previous deployment → Rollback to this deployment.
-- **Database:** migrations are forward-only; `0001–0008` are applied (`0009` Telegram push, `0010` Data API lockdown, `0011` referee assignments). Use the pre-0008 backup only for disasters, never as routine.
+- **Database:** migrations are forward-only; `0001–0008` are applied (`0009` Telegram push, `0010` Data API lockdown, `0011` referee assignments, `0012` roster sync column). Use the pre-0008 backup only for disasters, never as routine.
 
 ## 9. Readiness command reference
 

@@ -54,7 +54,7 @@
     rows.push(
       marketRow(
         '不讓分',
-        tw.ml ? `${g.away.abbr} ${NBA.odds(tw.ml.away_odds)} / ${g.home.abbr} ${NBA.odds(tw.ml.home_odds)}` : '<span class="text-slate-600">無盤口</span>',
+        tw.ml ? `${NBA.esc(awayName)} ${NBA.odds(tw.ml.away_odds)} / ${NBA.esc(homeName)} ${NBA.odds(tw.ml.home_odds)}` : '<span class="text-slate-600">無盤口</span>',
         intl.ml ? `${NBA.odds(intl.ml.away_odds)} / ${NBA.odds(intl.ml.home_odds)}` : '—',
         mlHome != null ? `主 ${NBA.pct(mlHome)}` : hwp != null ? `主 ${NBA.pct(hwp)}` : '—',
         mlEdge ? NBA.edgeBadge(mlEdge.tier, edgeText(mlEdge)) : ''

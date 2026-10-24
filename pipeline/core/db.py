@@ -110,16 +110,19 @@ def upsert_player_keep_team(cur, *, nba_player_id: int, name: str, team_id: int 
 
 
 def refresh_player_current_team(cur) -> int:
-    """players.team_id / is_starter ← 該球員「最近一場出賽」的球隊與先發旗標（與出賽順序無關，冪等）。"""
+    """players.team_id / is_starter ← 該球員「最近一場出賽」的球隊與先發旗標（與出賽順序無關，冪等）。
+    現役名單同步（roster_synced_at）比最近出賽更新時以名單為準：休賽季轉隊的球員在新球隊出賽前，
+    不會被上季最後一場 box score 蓋回舊球隊；在名單同步之後出賽才回到依出賽回填。"""
     cur.execute(
         """
         UPDATE players p SET team_id = l.team_id, is_starter = COALESCE(l.started, 0)
           FROM (
-            SELECT DISTINCT ON (s.player_id) s.player_id, s.team_id, s.started
+            SELECT DISTINCT ON (s.player_id) s.player_id, s.team_id, s.started, g.date_utc
               FROM player_game_stats s JOIN games g ON g.id = s.game_id
              ORDER BY s.player_id, g.date_utc DESC, g.id DESC
           ) l
          WHERE p.id = l.player_id
+           AND (p.roster_synced_at IS NULL OR l.date_utc > p.roster_synced_at)
            AND (p.team_id IS DISTINCT FROM l.team_id OR p.is_starter IS DISTINCT FROM COALESCE(l.started, 0))
         """
     )

@@ -57,6 +57,7 @@ def job_specs() -> list[JobSpec]:
     from .execution.ledger import paper_strategy_scheduled
     from .decision.job import decision_board_scheduled
     from .jobs.referee_collect import referees_scheduled
+    from .jobs.roster_sync import sync_rosters_job
     from .notify.job import (notify_actionable_scheduled, notify_daily_summary_scheduled,
                              notify_system_alerts_scheduled)
     from .config import settings
@@ -119,6 +120,11 @@ def job_specs() -> list[JobSpec]:
                 CronTrigger(hour="0-10,20-23", minute="7,37", timezone=TPE),
                 "台灣 20:07–10:37 每 30 分鐘（= 美東 08:07–21:37，夏令 / 冬令取聯集）：今天還有未開賽的 eligible 比賽才抓官方裁判頁 → referee_assignment_reports"
                 "（observed_at = 實際取得時間；不接入模型）", startup_catchup=False),
+        # ---- roster-sync-v1：現役名單 → players.team_id（轉隊 / 新秀 / 離隊；名單不完整整批不套用） ---- #
+        JobSpec("roster_sync", sync_rosters_job,
+                CronTrigger(hour=11, minute=50, timezone=TPE),
+                "每日 11:50（台灣 = 美東前一晚，當天交易 / 簽約公布後；12:00 賽程同步與 12:20 early 預測之前）："
+                "stats.nba.com playerindex（失敗改 ESPN）→ players.team_id / roster_synced_at", startup_catchup=False),
         # ---- E.1：Telegram 推播（notify-v1；未設定 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID → 立即返回） ---- #
         JobSpec("notify_actionable", notify_actionable_scheduled,
                 CronTrigger(minute="*", second=50, timezone=TPE),
