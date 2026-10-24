@@ -1,6 +1,6 @@
 # Phase E.2 — 賽前裁判分派收集（referees-v1）報告（2026-10-21）
 
-狀態：**本機已實作與驗證，尚未部署**；正式資料庫尚未套用 `0011_phase_e2_referees.sql`。
+狀態：0011 已套用到正式 DB（2026-10-21）；程式已 push，Railway 部署狀態見 §5。
 
 ## 1. 為什麼先做這一項
 
@@ -42,6 +42,14 @@ as-of 查詢規則（供日後研究）：某場比賽在 T 時點已知的裁�
 3. 隔天確認：`data_sources.nba_referees` 心跳 ok，`referee_assignment_reports` 有當日一列以上、`referee_assignments` 的 `match_status` 皆為 matched。
 4. `run_security_check.py` 應維持 PASS。
 
-## 5. 後續研究（尚未開始）
+## 5. 部署後修正：頁面日期 ≠ 賽程日期（2026-10-24）
+
+- 10/21 套用 0011 並 push 後，Railway 正逢全平台故障（builds paused，[事件頁](https://status.railway.com/incident/QH8L8B3E)），新 job 未部署；10/21 ET 的 11 場以本機手動執行 `run_referees.py` 收進正式 DB（全部賽前、全部比對成功）。10/22、10/23 ET 的賽前分派**沒有收到，無法補回**。
+- 10/24 00:50 ET 手動收集時發現：官方頁的 entry-meta 是**頁面當下的 ET 日期**；新一輪公布前，頁面仍列前一個比賽日的對戰卻標成今天，導致 12 場全部 `no_game`。
+- 修正：比對範圍改為頁面日期當天與前一天；整份對到前一天時 `state = previous_slate`（正常、不告警）；同一對戰連兩天都有比賽時記 `ambiguous`、不猜。頁面日期仍照實存在 `report_date_et`，`observed_at` 不變，所以開賽後才觀測到的分派在 as-of 查詢中自然被排除（這 12 筆 pregame = 0）。
+- 閒置時也更新 `data_sources.nba_referees` 心跳，否則沒有比賽的時段看不出 job 是否在跑。
+- 回歸：`test_page_dated_today_but_listing_previous_slate`；`test_referee_collect.py` 14 passed，`pytest -m 'not db'` 646 passed。
+
+## 6. 後續研究（尚未開始）
 
 累積至少半個賽季的前瞻資料後，再評估裁判特徵（例如裁判組合的歷史罰球率 / 節奏偏差）。歷史裁判統計須只用 T 以前已結束比賽的 box score，並與現行 `ml-v2.0` 分開版本化；不得以已看過的 2024-25 / 2025-26 評測季反覆調參。

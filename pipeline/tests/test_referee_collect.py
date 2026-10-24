@@ -67,11 +67,12 @@ def test_content_hash_ignores_row_order_and_observed_time():
 
 
 def test_match_row_statuses():
-    idx = {("GSW", "LAL"): [7], ("SAC", "LAC"): [8, 9]}
-    assert rc.match_row(idx, "Golden State @ L.A. Lakers") == (7, "matched")
-    assert rc.match_row(idx, "Sacramento @ LA Clippers") == (None, "ambiguous")
-    assert rc.match_row(idx, "Boston @ Miami") == (None, "no_game")
-    assert rc.match_row(idx, "Seattle @ Miami") == (None, "unknown_team")
+    d = datetime(2026, 10, 21).date()
+    idx = {("GSW", "LAL"): [(7, d)], ("SAC", "LAC"): [(8, d), (9, d - timedelta(days=1))]}
+    assert rc.match_row(idx, "Golden State @ L.A. Lakers") == (7, "matched", d)
+    assert rc.match_row(idx, "Sacramento @ LA Clippers") == (None, "ambiguous", None)   # 連兩天同對戰：不猜
+    assert rc.match_row(idx, "Boston @ Miami") == (None, "no_game", None)
+    assert rc.match_row(idx, "Seattle @ Miami") == (None, "unknown_team", None)
 
 
 # ------------------------------- DB（暫存 schema） ------------------------------- #
@@ -144,6 +145,20 @@ def test_unsynced_game_is_rematched_later_without_new_report(db, teams):
     rep2 = job(db, Getter(Resp(html())), now=NOW + timedelta(minutes=30))
     assert not rep2.new_report and rep2.rematched == 1
     assert {r["game_id"] for r in rows(db, "SELECT game_id FROM referee_assignments")} >= {lac}
+
+
+def test_page_dated_today_but_listing_previous_slate(db, teams):
+    """2026-10-24 實測：09:00 ET 前頁面仍是前一輪對戰，卻標成今天 → 比對到前一天、state = previous_slate。"""
+    prev_tip = datetime(2026, 10, 21, 2, 0, tzinfo=UTC)     # 10/20 22:00 ET（已開打）
+    lal = add_game(db, teams, "LAL", "GSW", prev_tip, status="final")
+    lac = add_game(db, teams, "LAC", "SAC", prev_tip)
+    add_game(db, teams, "GSW", "LAC", datetime(2026, 10, 21, 18, 0, tzinfo=UTC))  # 10/21 ET 14:00 的另一場：讓 job 非 idle
+    rep = job(db, Getter(Resp(html())), now=datetime(2026, 10, 21, 4, 50, tzinfo=UTC))   # 00:50 ET 10/21
+    assert rep.state == "previous_slate" and rep.matched == 2 and rep.slate_days == {"2026-10-20"}
+    assert {r["game_id"] for r in rows(db, "SELECT game_id FROM referee_assignments")} == {lal, lac}
+    [r] = rows(db, "SELECT report_date_et, observed_at FROM referee_assignment_reports")
+    assert str(r["report_date_et"]) == "2026-10-21"                                # 頁面標示照實保存
+    assert r["observed_at"] > prev_tip                                              # 開賽後才觀測 → as-of 自然排除
 
 
 @pytest.mark.parametrize("resp", [Resp("", 403), requests.ConnectionError("blocked"),

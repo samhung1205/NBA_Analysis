@@ -9,6 +9,10 @@ Phase E.2 — 賽前裁判分派收集（referees-v1；只累積資料，不接�
 
 as-of 契約：某場比賽「T 時點已知」的裁判 = observed_at ≤ T 的最新 report 中該場的列。observed_at 是回應完成時間；
 頁面日期只是 report_date_et。賽後 box score 的 officials 不得寫進這裡。
+
+頁面日期 ≠ 賽程日期（2026-10-24 實測）：entry-meta 是頁面當下的 ET 日期；新一輪分派公布（約 09:00 ET）前，頁面仍列
+前一個比賽日的對戰卻標成今天。因此比對範圍是 report_date_et 當天與前一天，整份對到前一天時 state = previous_slate
+（正常、不告警）。同一對戰連續兩天都有比賽時不猜，記 ambiguous。
 空表（尚未公布）不寫入；被擋 / 失敗不重試、不輪替 IP，只寫心跳。
 """
 from __future__ import annotations
@@ -54,7 +58,7 @@ _OFFICIAL = re.compile(r"^(?P<name>.+?)\s*\(#\s*(?P<num>\d+)\)$")
 class RefereeReport:
     as_of: str
     dry_run: bool = False
-    state: str | None = None            # ready / waiting / stale / unavailable / idle
+    state: str | None = None            # ready / previous_slate / waiting / stale / unavailable / idle
     report_date_et: str | None = None
     n_assignments: int = 0
     new_report: bool = False
@@ -63,6 +67,7 @@ class RefereeReport:
     rematched: int = 0
     note: str | None = None
     rows: list[dict] = field(default_factory=list)
+    slate_days: set[str] = field(default_factory=set)
 
 
 def parse_official(text: str | None) -> dict | None:
@@ -112,28 +117,31 @@ def has_games_ahead(cur, now: datetime) -> bool:
     return cur.fetchone() is not None
 
 
-def games_on_et_day(cur, day: date) -> dict[tuple[str, str], list[int]]:
-    """(away_abbr, home_abbr) → games.id（ET 比賽日 = day）。"""
+def games_on_et_day(cur, day: date) -> dict[tuple[str, str], list[tuple[int, date]]]:
+    """(away_abbr, home_abbr) → [(games.id, ET 比賽日)]，涵蓋 ET 比賽日 = day 與 day − 1（見檔頭：頁面日期 ≠ 賽程日期）。"""
     cur.execute("""SELECT g.id, g.date_utc, th.abbr AS home, ta.abbr AS away FROM games g
                      JOIN teams th ON th.id = g.home_team_id JOIN teams ta ON ta.id = g.away_team_id
                     WHERE g.date_utc >= %s AND g.date_utc < %s""",
-                (datetime.combine(day, datetime.min.time(), tzinfo=ET) - timedelta(hours=6),
+                (datetime.combine(day - timedelta(days=1), datetime.min.time(), tzinfo=ET) - timedelta(hours=6),
                  datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=ET) + timedelta(hours=6)))
-    out: dict[tuple[str, str], list[int]] = {}
+    out: dict[tuple[str, str], list[tuple[int, date]]] = {}
     for r in cur.fetchall():
-        if et_date(ensure_utc(r["date_utc"])) == day:
-            out.setdefault((r["away"], r["home"]), []).append(r["id"])
+        d = et_date(ensure_utc(r["date_utc"]))
+        if d in (day, day - timedelta(days=1)):
+            out.setdefault((r["away"], r["home"]), []).append((r["id"], d))
     return out
 
 
-def match_row(index: dict[tuple[str, str], list[int]], game_text: str) -> tuple[int | None, str]:
+def match_row(index: dict[tuple[str, str], list[tuple[int, date]]], game_text: str
+              ) -> tuple[int | None, str, date | None]:
+    """→ (games.id, match_status, 該場 ET 比賽日)。"""
     away, home = (team_abbr(x) for x in split_game(game_text))
     if away is None or home is None:
-        return None, "unknown_team"
-    ids = index.get((away, home), [])
-    if len(ids) == 1:
-        return ids[0], "matched"
-    return None, "ambiguous" if ids else "no_game"
+        return None, "unknown_team", None
+    hits = index.get((away, home), [])
+    if len(hits) == 1:
+        return hits[0][0], "matched", hits[0][1]
+    return None, "ambiguous" if hits else "no_game", None
 
 
 def store_report(cur, report: dict, *, rep: RefereeReport) -> int:
@@ -152,7 +160,7 @@ def store_report(cur, report: dict, *, rep: RefereeReport) -> int:
         return r["id"]
     index = games_on_et_day(cur, day)
     for a in report["assignments"]:
-        gid, status = match_row(index, a["game"])
+        gid, status, slate = match_row(index, a["game"])
         away, home = split_game(a["game"])
         cur.execute("""INSERT INTO referee_assignments (report_id, report_date_et, game_text, away_label, home_label,
                                                         game_id, match_status, officials)
@@ -162,6 +170,7 @@ def store_report(cur, report: dict, *, rep: RefereeReport) -> int:
             rep.unmatched.append(f"{a['game']}:{status}")
         else:
             rep.matched += 1
+            rep.slate_days.add(slate.isoformat())
     return r["id"]
 
 
@@ -175,7 +184,7 @@ def rematch(cur, day: date) -> int:
     index = games_on_et_day(cur, day)
     n = 0
     for row in rows:
-        gid, status = match_row(index, row["game_text"])
+        gid, status, _ = match_row(index, row["game_text"])
         if gid is not None:
             cur.execute("UPDATE referee_assignments SET game_id = %s, match_status = %s WHERE id = %s",
                         (gid, status, row["id"]))
@@ -223,13 +232,22 @@ def collect_referees_job(now: datetime | None = None, *, db=None, get: Callable[
             index = games_on_et_day(cur, date.fromisoformat(report["report_date_et"]))
         rep.rows = [{"game": a["game"], "match": match_row(index, a["game"]), "officials": officials(a)}
                     for a in report["assignments"]]
+        rep.slate_days = {m[2].isoformat() for m in (r["match"] for r in rep.rows) if m[2] is not None}
+        _classify_slate(rep)
         return rep
     if not report["assignments"]:
         return rep                                        # 尚未公布：不寫空 report
     with db.transaction() as cur:
         store_report(cur, report, rep=rep)
         rep.rematched = rematch(cur, date.fromisoformat(report["report_date_et"]))
+    _classify_slate(rep)
     return rep
+
+
+def _classify_slate(rep: RefereeReport) -> None:
+    """比對到的場次全是頁面日期前一天 → 頁面尚未換成新一輪（previous_slate；不是錯誤）。"""
+    if rep.state == "ready" and rep.slate_days and rep.report_date_et not in rep.slate_days:
+        rep.state = "previous_slate"
 
 
 def referees_scheduled() -> None:
@@ -244,6 +262,7 @@ def referees_scheduled() -> None:
         if rep.state == "idle":
             activity.log_skip("referees", rep.note or "idle")
             with db.cursor() as cur:
+                activity.touch_heartbeat(cur, **HEARTBEAT)          # idle 也留下「有在跑」的紀錄
                 activity.sync_expected_interval(cur, HEARTBEAT["source_key"], None)
             return
         if rep.state == "unavailable":
