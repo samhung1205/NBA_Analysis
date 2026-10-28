@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 HEARTBEAT = dict(source_key="decision_board", display_name="決策中心物化（D.5 actual exposure / bankroll）",
                  category="model", expected_interval_min=1)
 LOCK_KEY = "decision_board:materialize"
+BUSY_NOTE = "另一個 decision board 物化正在執行，略過"
 
 SNAPSHOT_COLUMNS = ("user_id", "account_id", "betting_day", "as_of", "last_confirmed_at", "decision_version",
                     "risk_policy_version", "execution_policy_version", "scope", "input_fingerprint",
@@ -421,7 +422,7 @@ def decision_board_job(now: datetime | None = None, *, dry_run: bool = False, us
     with db.transaction() as cur:
         cur.execute("SELECT pg_try_advisory_xact_lock(hashtext(%s)) AS ok", (LOCK_KEY,))
         if not cur.fetchone()["ok"]:
-            rep.note = "另一個 decision board 物化正在執行，略過"
+            rep.note = BUSY_NOTE
             return rep
         rep.settled = settle_actual_bets(cur, now)
         rep.ledger_entries = sync_settlement_ledger(cur, now)
@@ -429,7 +430,7 @@ def decision_board_job(now: datetime | None = None, *, dry_run: bool = False, us
         cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         cur.execute("SELECT pg_try_advisory_xact_lock(hashtext(%s)) AS ok", (LOCK_KEY,))
         if not cur.fetchone()["ok"]:
-            rep.note = "另一個 decision board 物化正在執行，略過"
+            rep.note = BUSY_NOTE
             return rep
         materialize(cur, now, user_ids=user_ids, days=days, rep=rep)
     if probe is not None:          # 完整物化成功後才記錄「這個狀態向量已完整物化過」（idle 才會被下一輪略過）

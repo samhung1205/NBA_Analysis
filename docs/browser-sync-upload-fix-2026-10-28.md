@@ -45,3 +45,13 @@ acb42d3 正式部署後，實際 79,771 bytes 上傳在 store 階段仍連續兩
 新增 consumer 專用的 connection-bound DB adapter：清理、交易領取、逐場匯入、pricing、sizing、decision、進度與結案都重用已保留的同一連線；cursor 與 transaction 仍各自建立，既有交易原子性／隔離層級保留，不修改全域 pool、不加大正式連線上限。該 serialized consumer 才使用此 adapter，其他排程不變。
 
 隔離 DB 六項再次全部通過；其中壓縮格式的真實 consumer 案例將 pool max 設為 1，成功匯入六種市場、更新決策、清除 inbox，證明不再等待第二條連線。Python 純邏輯 23 passed。
+
+## 完整匯入後的更新診斷與等待時間（2026-10-29）
+
+e9e5510 的真實工作 57abc6b4-624a-48a9-9bb5-c816aaa49320 已匯入 12 場／72 個市場，過舊與拒絕皆為 0；處理耗時 8 分 52 秒，最後停在 decision 階段、decision_refreshed=false。舊收據無各階段結果，不能直接斷言是哪一階段或鎖衝突造成，亦不人工改成成功。
+
+補強收據新增 pricing 錯誤數、sizing 缺漏數、decision 是否 busy／完成與嘗試次數，不記原始錯誤字串。僅在既有 decision_board_job 明確回報物化鎖被占用時，每兩秒重試、最多十五次，且不能跨過 processing lease；其他失敗維持 partial。前端區分盤口完整匯入與後續更新尚未確認。
+
+pricing／sizing 的 persist 改用既有 Psycopg 3.2.10 executemany：沿用相同順序、欄位、ON CONFLICT DO NOTHING、呼叫端交易與完整候選集合，減少逐列網路往返。模型、EV、Kelly、風控比例、quote TTL、盤口時間與稽核資料均不變。[Psycopg 官方契約](https://www.psycopg.org/psycopg3/docs/api/cursors.html)規定未使用 returning 時 rowcount 是累計影響列數，據此維持新增／既有計數。
+
+純 Python 同步測試 27 passed（鎖衝突後成功、持續 busy 上限、非 busy 不重試、lease 邊界）；網站同步測試 29 passed（含完整匯入但決策未確認的文案），build 通過。隔離 Postgres 的同步、pricing 與 sizing 共 15 passed，包含與純計算值一致、版本／組合改變保留舊列、重跑冪等、過期不可操作及 as-of 邊界。最新正式實測結果另記。

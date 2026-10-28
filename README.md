@@ -298,7 +298,7 @@ macOS 跑研究用評估（XGBoost）需 OpenMP：`brew install libomp`，見 [d
 | `npm run test:api` | API smoke test（需服務已啟動，且使用本機 D1 seed） | 162 passed |
 | `npm run test:auth` | 登入 / 權限防護 | 14 passed |
 | `npm run test:status` | 來源角色、排程休息、過期與警告分類（不連 DB） | 18 passed（2026-10-28） |
-| `npm run test:twsport-sync` | Chrome 同步權限、佇列、併發、白名單、collector 與前端重送恢復 | 28 passed（fixture／mock、斷線恢復、壓縮與進度；2026-10-28） |
+| `npm run test:twsport-sync` | Chrome 同步權限、佇列、併發、白名單、collector 與前端重送恢復 | 29 passed（fixture／mock、斷線恢復、壓縮、進度與結果區分；2026-10-29） |
 | `npm run test:decision` | D.5 更正／出金回歸（記憶體 SQLite + Hono，不連網） | 19 passed |
 | `pytest`（pipeline） | Python 純邏輯 + DB 整合 | 上次完整稽核 741 passed；Phase E.1 後純邏輯 618 passed、推播 DB 7 passed |
 

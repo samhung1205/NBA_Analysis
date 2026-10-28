@@ -77,18 +77,14 @@ def _db_value(k: str, v: Any) -> Any:
 
 
 def persist(cur, pricings: list[engine.MarketPricing]) -> tuple[int, int]:
-    inserted = existing = 0
     cols = ", ".join(COLUMNS)
     ph = ", ".join("%s::jsonb" if c in ("warnings", "diagnostics") else "%s" for c in COLUMNS)
-    for mp in pricings:
-        for row in mp.to_rows():
-            cur.execute(f"INSERT INTO market_pricing_snapshots ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING",
-                        tuple(_db_value(c, row[c]) for c in COLUMNS))
-            if cur.rowcount == 1:
-                inserted += 1
-            else:
-                existing += 1
-    return inserted, existing
+    values = [tuple(_db_value(c, row[c]) for c in COLUMNS) for mp in pricings for row in mp.to_rows()]
+    if not values:
+        return 0, 0
+    # Psycopg batches network round trips; the same ordered statements and caller transaction remain intact.
+    cur.executemany(f"INSERT INTO market_pricing_snapshots ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING", values)
+    return cur.rowcount, len(values) - cur.rowcount
 
 
 def price_games(odds_rows: list[dict], pred_rows: list[dict], game_ids: list[int], as_of: datetime,

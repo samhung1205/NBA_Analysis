@@ -54,7 +54,7 @@
 - 只傳必要賽事與市場白名單欄位，不讀取或傳送 cookie、Authorization、登入、帳戶、下注紀錄、HAR 或整頁 HTML。瀏覽器同源請求沿用網站正常的 session，不抽取憑證。每個 event detail 回應完成時間分別保留，伺服器另記接收時間。
 - 網站要求有效登入、相同 Origin、JSON、2 MiB 上限，先建立冪等工作，再接受一次 capture。其他使用者不能讀取或上傳該工作。全站單一 active 工作由 DB unique index 保護；Python 另有 schema 範圍的 advisory lock 與交易領取。
 - Python 再驗證白名單、時間、日期、重複賽事與合法市場，沿用台彩 parser、對戰匹配、快照冪等及過期保護。每場使用自己的 capture time，新增快照保留 job ID、擷取／接收時間。未變動報價仍沿用既有 last-seen 契約，工作與抓取紀錄保留稽核。
-- 接續執行既有 Python 定價、sizing 與該使用者的決策物化。部分匹配失敗或決策未完成時顯示 partial，不宣稱額度最新。未改模型、risk-v1、下注或結算策略；不回填歷史 paper 證據、不自動下注。
+- 接續執行既有 Python 定價、sizing 與該使用者的決策物化。部分匹配失敗或決策未完成時顯示 partial，不宣稱額度最新；盤口完整匯入時會明確顯示場次／市場數，與後續更新未確認分開。決策物化鎖占用時會有上限地短暫重試，其他錯誤不盲目重試。未改模型、risk-v1、下注或結算策略；不回填歷史 paper 證據、不自動下注。
 - inbox payload 以有上限的 gzip envelope 儲存，Python 向下相容讀取舊 JSON；完成、失敗或逾時清除；保留工作狀態、計數、時間、run IDs 與安全錯誤碼。正常盤口快照依既有稽核規則保存。
 
 ## 使用範圍與停用

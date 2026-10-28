@@ -10,6 +10,7 @@ import os
 import math
 import base64
 import zlib
+import time
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -136,6 +137,40 @@ def validate_capture(payload: dict, job: dict, now: datetime) -> list[tuple[date
     return result
 
 
+def refresh_decision(job, summary, *, db, progress=None, clock=now_utc, pause=time.sleep):
+    """Run authoritative jobs, recording only bounded diagnostics; retry only an explicit lock conflict."""
+    from ..pricing.job import pricing_job
+    from ..sizing.job import sizing_job
+    from ..decision.job import decision_board_job, BUSY_NOTE
+
+    def stage(name):
+        summary['stage'] = name
+        if progress:
+            progress(summary)
+
+    as_of = clock()
+    diagnostics = summary['refresh'] = {}
+    stage('pricing')
+    pricing = pricing_job(as_of, db=db)
+    diagnostics['pricing'] = dict(errors=len(pricing.errors), unavailable=bool(pricing.note))
+    stage('sizing')
+    sizing = sizing_job(as_of, db=db)
+    diagnostics['sizing'] = dict(pricing_missing=len(sizing.pricing_missing), unavailable=bool(sizing.note))
+    stage('decision')
+    for attempt in range(1, 16):
+        decision = decision_board_job(user_ids=[job['user_id']], db=db)
+        busy = decision.note == BUSY_NOTE
+        diagnostics['decision'] = dict(status='busy' if busy else 'unavailable' if decision.note else 'completed',
+                                       users=decision.users, attempts=attempt)
+        if progress:
+            progress(summary)
+        if not busy or attempt == 15 or ensure_utc(clock()) + timedelta(seconds=2) >= ensure_utc(parse_utc(job['expires_at'])):
+            break
+        pause(2)
+    return (not pricing.errors and not pricing.note and not sizing.pricing_missing and not sizing.note
+            and not decision.note and decision.users == 1)
+
+
 def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_utc, progress=None):
     from .ingest import run_odds_job
     now = ensure_utc(now or clock())
@@ -171,27 +206,15 @@ def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_
             progress(summary)
     if summary['new'] + summary['unchanged'] == 0:
         return 'failed', summary, 'no_snapshots_imported'
+    summary['import_complete'] = not problem
     # Existing Python jobs remain the only authority for all pricing/sizing/capacity.
     try:
         if refresh is None:
-            from ..pricing.job import pricing_job
-            from ..sizing.job import sizing_job
-            from ..decision.job import decision_board_job
-            def refresh():
-                as_of = now_utc()
-                summary['stage'] = 'pricing'
-                if progress: progress(summary)
-                pricing = pricing_job(as_of, db=db)
-                summary['stage'] = 'sizing'
-                if progress: progress(summary)
-                sizing = sizing_job(as_of, db=db)
-                summary['stage'] = 'decision'
-                if progress: progress(summary)
-                decision = decision_board_job(user_ids=[job['user_id']], db=db)
-                return not pricing.errors and not sizing.pricing_missing and not sizing.note and not decision.note and decision.users == 1
+            refresh = lambda: refresh_decision(job, summary, db=db, progress=progress, clock=clock)
         summary['decision_refreshed'] = bool(refresh())
         problem |= not summary['decision_refreshed']
     except Exception:
+        summary['refresh_error'] = 'refresh_failed'
         problem = True
     return ('partial' if problem else 'succeeded'), summary, None if not problem else 'partial_import_or_refresh'
 

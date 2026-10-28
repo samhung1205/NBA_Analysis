@@ -176,20 +176,17 @@ def _db_value(k: str, v: Any) -> Any:
 
 
 def persist(cur, results: list[engine.SizingResult]) -> tuple[int, int]:
-    inserted = existing = 0
     cols = ", ".join(COLUMNS)
     ph = ", ".join("%s::jsonb" if c in JSON_COLUMNS else "%s" for c in COLUMNS)
+    values = []
     for r in results:
         if r.market_pricing_snapshot_id is None:
             raise ValueError("只有對應 market_pricing_snapshots 的 sizing 結果可以寫入")
-        row = {c: getattr(r, c) for c in COLUMNS}
-        cur.execute(f"INSERT INTO bet_sizing_snapshots ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING",
-                    tuple(_db_value(c, row[c]) for c in COLUMNS))
-        if cur.rowcount == 1:
-            inserted += 1
-        else:
-            existing += 1
-    return inserted, existing
+        values.append(tuple(_db_value(c, getattr(r, c)) for c in COLUMNS))
+    if not values:
+        return 0, 0
+    cur.executemany(f"INSERT INTO bet_sizing_snapshots ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING", values)
+    return cur.rowcount, len(values) - cur.rowcount
 
 
 def _summarize(rep: SizingReport, results: list[engine.SizingResult], bankroll: float | None, keep: bool) -> None:

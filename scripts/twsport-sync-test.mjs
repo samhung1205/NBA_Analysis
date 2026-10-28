@@ -233,14 +233,14 @@ await test('extension uses only the exact sportsbook frame and does not double s
  const absent=background({frames:[{frameId:0,url:'https://evil.test/'}]});
  assert.equal((await absent.send({type:'NBA_TWSPORT_COLLECT',date:day})).error,'open_sportsbook');assert.equal(absent.opened,1);
 });
-async function frontend({captureError=null,uploadDisconnect=false,runningProgress=false}={}) {
+async function frontend({captureError=null,uploadDisconnect=false,runningProgress=false,partialRefresh=false}={}) {
  let click,reads=0,events=0;
  const messages=[];
  const posts=[],button={disabled:true,textContent:'',addEventListener:(name,fn)=>{if(name==='click')click=fn}},status={get textContent(){return messages.at(-1)},set textContent(value){messages.push(value)}};
  const job={id:'ui-fixture',betting_day:day,state:'capturing'};
  const NBA={tpe:t=>t,get:async path=>{
   if(!path.includes('?id='))return {enabled:true,extension_id:'a'.repeat(32),job:null};
-  reads++;return {job:reads===1?{...job,state:runningProgress?'running':'queued',...(runningProgress?{summary:{games:12,markets:72,stage:'pricing'}}:{})}:{...job,state:'succeeded',summary:{markets:6,games:1,capture_times:['fixture-time']}}};
+  reads++;return {job:reads===1?{...job,state:runningProgress?'running':'queued',...(runningProgress?{summary:{games:12,markets:72,stage:'pricing'}}:{})}:{...job,state:partialRefresh?'partial':'succeeded',summary:{markets:6,games:1,capture_times:['fixture-time'],import_complete:true,decision_refreshed:!partialRefresh}}};
  },post:async(path,body)=>{
   posts.push({path,body});
   if(path.endsWith('/capture')){if(uploadDisconnect)throw new Error('network');return {job:{...job,state:'queued'}}}
@@ -271,5 +271,9 @@ await test('frontend cancels blocked capture without uploading or announcing suc
 await test('frontend recovers an upload disconnect through receipt without resending',async()=>{
  const r=await frontend({uploadDisconnect:true});assert.equal(r.posts.filter(p=>p.path.endsWith('/capture')).length,1);
  assert.equal(r.posts.filter(p=>p.path.endsWith('/cancel')).length,0);assert.equal(r.events,1);assert.ok(r.status.textContent.includes('決策已更新'));
+});
+await test('frontend distinguishes complete import from unconfirmed decision refresh',async()=>{
+ const r=await frontend({partialRefresh:true});assert.ok(r.status.textContent.includes('盤口已完整匯入 6 個市場（1 場）'));
+ assert.ok(!r.status.textContent.includes('決策已更新'));assert.equal(r.events,1);
 });
 console.log(`\n${passed} passed`);

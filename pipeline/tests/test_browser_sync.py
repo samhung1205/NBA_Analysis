@@ -254,3 +254,37 @@ def test_claimed_job_has_processing_lease_without_relaxing_capture_freshness(db,
         return 'succeeded',{'decision_refreshed':True},None
     monkeypatch.setattr(bs,'import_capture',process)
     bs.browser_sync_job(db=db)
+
+@pytest.mark.parametrize('busy_count,other_note,expected', [(1,None,True),(20,None,False),(0,'schema unavailable',False)])
+def test_decision_refresh_retries_only_lock_conflicts_and_keeps_diagnostics(monkeypatch,busy_count,other_note,expected):
+    from core.pricing import job as pj
+    from core.sizing import job as sj
+    from core.decision import job as dj
+    calls,pauses=[],[]
+    monkeypatch.setattr(pj,'pricing_job',lambda *a,**k:SimpleNamespace(errors=[],note=None))
+    monkeypatch.setattr(sj,'sizing_job',lambda *a,**k:SimpleNamespace(pricing_missing=[],note=None))
+    def decide(**kw):
+        calls.append(kw)
+        note=dj.BUSY_NOTE if len(calls)<=busy_count else other_note
+        return SimpleNamespace(note=note,users=0 if note else 1)
+    monkeypatch.setattr(dj,'decision_board_job',decide)
+    _,job=fixture();summary={}
+    result=bs.refresh_decision(job,summary,db='reserved-connection',clock=lambda:NOW,pause=pauses.append)
+    assert result is expected
+    assert len(calls)==min(busy_count+1,15)
+    assert all(c['db']=='reserved-connection' and c['user_ids']==[job['user_id']] for c in calls)
+    assert len(pauses)==len(calls)-1 and all(p==2 for p in pauses)
+    assert summary['refresh']['decision']['attempts']==len(calls)
+    assert 'schema unavailable' not in json.dumps(summary)
+
+
+def test_decision_retry_stops_at_processing_lease(monkeypatch):
+    from core.pricing import job as pj
+    from core.sizing import job as sj
+    from core.decision import job as dj
+    monkeypatch.setattr(pj,'pricing_job',lambda *a,**k:SimpleNamespace(errors=[],note=None))
+    monkeypatch.setattr(sj,'sizing_job',lambda *a,**k:SimpleNamespace(pricing_missing=[],note=None))
+    monkeypatch.setattr(dj,'decision_board_job',lambda **k:SimpleNamespace(note=dj.BUSY_NOTE,users=0))
+    _,job=fixture();job['expires_at']=NOW+timedelta(seconds=1);summary={}
+    assert not bs.refresh_decision(job,summary,db=None,clock=lambda:NOW,pause=lambda _:pytest.fail('must not sleep past lease'))
+    assert summary['refresh']['decision']['attempts']==1

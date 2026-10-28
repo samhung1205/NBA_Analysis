@@ -42,6 +42,9 @@
       const s = job.summary || {};
       const times = s.capture_times || [];
       say(`已匯入 ${s.markets ?? 0} 個市場（${s.games ?? 0} 場），決策已更新。盤口實際擷取時間：${NBA.tpe(times[0])}${times.length > 1 ? ' ～ ' + NBA.tpe(times.at(-1)) : ''}。可操作與否仍以決策中心當前有效額度為準。`);
+    } else if (job.state === 'partial' && job.summary?.import_complete) {
+      const s = job.summary;
+      say(`盤口已完整匯入 ${s.markets ?? 0} 個市場（${s.games ?? 0} 場）；定價、注碼或決策尚未確認完成。請查看系統狀態，以決策中心當前有效額度為準。`);
     } else say(TEXT[job.error_code] || '同步未完整完成，請檢查系統狀態後再試。');
   }
   const message = data => new Promise((resolve, reject) => {
