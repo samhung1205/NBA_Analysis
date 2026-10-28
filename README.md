@@ -46,9 +46,9 @@
 
 ```
  NBA CDN / ESPN / 官方傷病 PDF ─┐
- 台彩 HAR（手動）/ The Odds API ─┤
+ 台彩 Chrome 同步 / HAR 備援 / The Odds API ─┤
                                  ▼
-          Railway 排程器（Python，17 個 jobs，24 小時常駐）
+          Railway 排程器（Python，19 個 jobs，24 小時常駐）
           擷取 → 特徵 → 預測 → 定價 → 注碼 → paper → 決策物化 → 推播
                                  │ 讀寫
                                  ▼
@@ -144,6 +144,8 @@
 
 依球隊分組的官方傷病申報，**主力缺陣**的球隊排在前面。可切換今日 / 明日或任選日期。NBA 官方於賽前一日當地 17:00 前申報，賽前會多次更新。
 
+球員姓名與「主力」標籤保持同一行；手機或窄卡片可在各隊名單內左右捲動，完整姓名不截斷。
+
 ### 4.7 回測 / 績效 `/performance`
 
 - **模型回測績效**：歷史準確率、ATS、大小分、上半場命中率、Log Loss / Brier。
@@ -152,6 +154,10 @@
 ### 4.8 系統狀態 `/status`
 
 各資料來源（賽程、比分、傷病、盤口、定價、決策物化等）的最後更新時間與健康度，每分鐘自動刷新。休賽期或當天沒有比賽時，許多項目顯示「等待中 / idle」屬正常。
+
+狀態頁分開顯示真正的「資料過期」、執行警告、台彩需匯入盤口、備援待命、歷史回填及未使用來源。備援只有在其他新鮮來源較晚成功時才判讀為待命，原始警告仍保留；不代表備援已重新測試成功。裁判來源在台灣 10:37 至 20:07 之間沒有輪詢，會顯示等待排程及下次時間；若先前應執行的時段已漏跑，仍會告警。歷史回填警告另外計數，不混入即時來源整體狀態。
+
+2026-10-28 的排版修正、六筆提示診斷與免 HAR 可行性評估見 [本次修正紀錄](docs/ui-status-fixes-2026-10-28.md)。
 
 ## 5. 每日使用流程
 
@@ -188,6 +194,8 @@
    ```
 
 注意：盤口時間以 HAR 實際擷取時間為準；超過 2 小時預設拒絕匯入，但 **T-60 策略還要求擷取在開賽前 120～60 分鐘，且盡快匯入、建議在 T-60 前完成**。`--inspect` 成功只代表可解析，不代表 actionable。詳見 [資料來源處理方案](docs/data-source-access-2026-10-15.md) 與 [production-runbook.md](docs/production-runbook.md) §7。
+
+2026-10-28 已依免費需求實作 **Chrome 同步助手**：一般桌面 Chrome 正常開啟台彩 NBA → 決策中心按「同步台彩盤口」→ Python 驗證匯入並更新決策，不必匯出 HAR、不需付費資料 API。一次性安裝、設定與限制見[同步指南](docs/browser-sync-guide.md)。目前僅完成本機實作與隔離驗證，**尚未安裝助手、套用正式 0013 或部署；真實台彩仍待實測**。HAR 維持備援，未採用付費 JBot。
 
 ## 7. 名詞解釋
 
@@ -289,6 +297,8 @@ macOS 跑研究用評估（XGBoost）需 OpenMP：`brew install libomp`，見 [d
 |---|---|---|
 | `npm run test:api` | API smoke test（需服務已啟動，且使用本機 D1 seed） | 162 passed |
 | `npm run test:auth` | 登入 / 權限防護 | 14 passed |
+| `npm run test:status` | 來源角色、排程休息、過期與警告分類（不連 DB） | 18 passed（2026-10-28） |
+| `npm run test:twsport-sync` | Chrome 同步權限、佇列、併發、白名單、collector 與前端重送恢復 | 21 passed（fixture／mock；2026-10-28） |
 | `npm run test:decision` | D.5 更正／出金回歸（記憶體 SQLite + Hono，不連網） | 19 passed |
 | `pytest`（pipeline） | Python 純邏輯 + DB 整合 | 上次完整稽核 741 passed；Phase E.1 後純邏輯 618 passed、推播 DB 7 passed |
 
@@ -357,7 +367,7 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 │   ├── core/execution/   paper strategy、結算
 │   ├── core/decision/    決策中心、實際下注 exposure、bankroll
 │   ├── core/notify/      Telegram 推播（Phase E.1）
-│   ├── core/scheduling.py  17 個排程 job 定義
+│   ├── core/scheduling.py  19 個排程 job 定義
 │   ├── scheduler.py      排程器入口
 │   └── run_*.py          各項手動指令
 ├── migrations/postgres/  正式 schema（0001–0011，權威版）
@@ -384,7 +394,7 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 
 **使用限制**
 
-- 台彩盤口只能手動匯入 HAR；國際盤只作診斷參考。
+- 正式台彩目前仍用 HAR；本機新增免費 Chrome 同步，啟用與真實擷取待驗證，國際盤只作診斷參考。
 - 模型預測分佈中心 μ = 0 是評測後的修正，2026-27 賽季才是真正的前瞻驗證期。
 - 沒有歷史投注獲利證據；歷史模型準確率不等於能贏盤口。
 - Supabase 免費專案閒置會被暫停，排程器長時間停機後需手動 Restore。

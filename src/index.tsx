@@ -16,6 +16,7 @@ import api from './routes/api'
 import decision from './routes/decision'
 import auth from './routes/auth'
 import pages from './pages/index'
+import twsportSync from './routes/twsport-sync'
 
 const app = new Hono<{ Bindings: AppBindings }>()
 
@@ -26,6 +27,7 @@ app.use('/api/*', cors({ origin: '*', credentials: true }))
 app.get('/healthz', (c) => c.json({ ok: true, stage: 'stage-1', ts: new Date().toISOString() }))
 
 app.route('/api/auth', auth)
+app.route('/api', twsportSync)
 app.route('/api', decision) // D.5：decision board / bets / bankroll（需登入）
 app.route('/api', api)
 app.route('/', pages)

@@ -113,6 +113,8 @@ export type AppBindings = {
   DATABASE_URL?: string
   SESSION_SECRET?: string
   ALLOW_REGISTRATION?: string
+  TWSPORT_SYNC_ENABLED?: string
+  TWSPORT_EXTENSION_ID?: string
 }
 
 export async function getDb(env: AppBindings): Promise<Db> {

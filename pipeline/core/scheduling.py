@@ -58,11 +58,14 @@ def job_specs() -> list[JobSpec]:
     from .decision.job import decision_board_scheduled
     from .jobs.referee_collect import referees_scheduled
     from .jobs.roster_sync import sync_rosters_job
+    from .odds.browser_sync import browser_sync_job
     from .notify.job import (notify_actionable_scheduled, notify_daily_summary_scheduled,
                              notify_system_alerts_scheduled)
     from .config import settings
 
     return [
+        JobSpec("browser_sync", browser_sync_job, IntervalTrigger(seconds=15, timezone=TPE),
+                "每 15 秒：處理使用者明確送出的 Chrome 盤口（未啟用即返回；不抓外部來源）", startup_catchup=False),
         JobSpec("daily_schedule_scores", fetch_schedule_and_scores_job,
                 CronTrigger(hour=12, minute=0, timezone=TPE),
                 "每日 12:00（台灣）：昨日 ET 殘留 + 今日 + 明日賽程/比分/結算"),

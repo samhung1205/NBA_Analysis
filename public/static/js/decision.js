@@ -674,6 +674,7 @@
   tabs.forEach((t) => t.addEventListener('click', () => load(NBA.tpeDateStr(Number(t.dataset.dday)))));
   if (picker) picker.addEventListener('change', () => picker.value && load(picker.value));
   $('decision-refresh').addEventListener('click', () => load(currentDate));
+  window.addEventListener('nba:twsport-synced', () => load(currentDate, { silent: true }));
   setInterval(() => { if (document.visibilityState === 'visible') load(currentDate, { silent: true }); }, 60000);
   // 從台彩 App 切回來（或頁面從 bfcache 還原）時立即更新，不等下一個 60 秒
   const refreshIfIdle = () => { if (document.visibilityState === 'visible' && Date.now() - lastLoadedAt > 20000) load(currentDate, { silent: true }); };

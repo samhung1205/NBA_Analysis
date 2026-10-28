@@ -11,26 +11,36 @@
 
   const HEALTH = {
     ok: ['正常', 'text-green-400', 'fa-circle-check', 'border-green-900/50'],
-    warn: ['資料過期', 'text-amber-400', 'fa-triangle-exclamation', 'border-amber-900/50'],
+    warn: ['需留意', 'text-amber-400', 'fa-triangle-exclamation', 'border-amber-900/50'],
     error: ['失敗', 'text-red-400', 'fa-circle-xmark', 'border-red-900/60'],
     unknown: ['未知', 'text-slate-400', 'fa-circle-question', 'border-slate-800'],
   };
 
-  const CATEGORY = { stats: '數據', injury: '傷病', odds: '盤口', model: '模型', notify: '推播' };
+  const STATES = {
+    ...HEALTH,
+    stale: ['資料過期', ...HEALTH.warn.slice(1)],
+    warning: ['執行警告', ...HEALTH.warn.slice(1)],
+    blocked: ['需匯入盤口', ...HEALTH.warn.slice(1)],
+    waiting: ['等待排程', 'text-slate-300', 'fa-clock', 'border-slate-800'],
+    standby: ['備援待命', ...HEALTH.unknown.slice(1)],
+    inactive: ['未使用', ...HEALTH.unknown.slice(1)],
+    historical: ['歷史回填', ...HEALTH.unknown.slice(1)],
+  };
+  const CATEGORY = { games: '賽程／比分', stats: '數據', injury: '傷病', odds: '盤口', model: '模型', notify: '推播' };
 
   function card(s) {
-    const [label, cls, icon, border] = HEALTH[s.health] || HEALTH.unknown;
+    const [label, cls, icon, border] = STATES[s.state] || HEALTH[s.health] || HEALTH.unknown;
     return `
     <article class="rounded-xl border ${border} bg-slate-900/60 p-4">
       <header class="flex items-start justify-between gap-2 mb-3">
         <div class="min-w-0">
-          <h3 class="font-semibold text-sm truncate">${NBA.esc(s.display_name)}</h3>
+          <h3 class="font-semibold text-sm">${NBA.esc(s.display_name)}</h3>
           <p class="text-xs text-slate-400">
             <code>${NBA.esc(s.source_key)}</code>
             ${s.category ? ` · ${NBA.esc(CATEGORY[s.category] || s.category)}` : ''}
           </p>
         </div>
-        <span class="edge-badge ${s.health === 'ok' ? 'status-available' : s.health === 'warn' ? 'status-questionable' : s.health === 'error' ? 'status-out' : 'edge-chip-none'}">
+        <span class="edge-badge shrink-0 ${s.health === 'ok' && s.state !== 'waiting' ? 'status-available' : s.health === 'warn' ? 'status-questionable' : s.health === 'error' ? 'status-out' : 'edge-chip-none'}">
           <i class="fas ${icon}" aria-hidden="true"></i>${label}
         </span>
       </header>
@@ -39,16 +49,20 @@
         <div><dt class="text-xs text-slate-400">預期間隔</dt><dd class="num text-slate-300">${interval(s.expected_interval_min)}</dd></div>
         <div><dt class="text-xs text-slate-400">更新時間</dt><dd class="text-slate-400">${NBA.tpe(s.last_success_at)}</dd></div>
         <div><dt class="text-xs text-slate-400">寫入筆數</dt><dd class="num text-slate-300">${s.records_updated ?? '—'}</dd></div>
+        <div><dt class="text-xs text-slate-400">最後執行</dt><dd class="text-slate-300">${NBA.tpe(s.last_attempt_at)}</dd></div>
+        ${s.next_poll_at ? `<div><dt class="text-xs text-slate-400">下次排程</dt><dd class="text-slate-300">${NBA.tpe(s.next_poll_at)}</dd></div>` : ''}
       </dl>
+      ${s.detail ? `<p class="mt-3 text-xs text-slate-300">${NBA.esc(s.detail)}</p>` : ''}
+      ${s.action ? `<p class="mt-2 text-xs text-amber-300">${NBA.esc(s.action)}</p>` : ''}
       ${
         s.last_error
-          ? `<p class="mt-3 pt-2 border-t border-slate-800 text-xs text-red-400"><i class="fas fa-bug mr-1"></i>${NBA.esc(s.last_error)}</p>`
+          ? `<p class="mt-3 pt-2 border-t border-slate-800 text-xs ${s.operational && s.health === 'error' ? 'text-red-400' : 'text-amber-300'}">上次執行紀錄：${NBA.esc(s.last_error)}</p>`
           : ''
       }
     </article>`;
   }
 
-  // 依嚴重度排序：失敗 → 過期 → 未知 → 正常
+  // 目前需處理的來源優先，歷史與未使用來源列在後面。
   const SEVERITY = { error: 0, warn: 1, unknown: 2, ok: 3 };
   // 台彩自動擷取被阻擋時的合規備援（不繞過防護；HAR 含登入資訊，不要分享或提交）
   const HAR_HELP = `<section class="panel mt-5" id="har-help">
@@ -78,13 +92,17 @@
           <span class="text-slate-400">資料庫驅動 <code class="text-slate-400">${NBA.esc(d.db_driver)}</code></span>
           <span class="text-slate-400">階段 <code class="text-slate-400">${NBA.esc(d.stage)}</code></span>
         </div>
-        ${d.note ? `<p class="text-xs text-slate-400 mt-1.5"><i class="fas fa-circle-info mr-1"></i>${NBA.esc(d.note)}</p>` : ''}`;
+        ${d.note ? `<p class="text-xs text-slate-400 mt-1.5"><i class="fas fa-circle-info mr-1"></i>${NBA.esc(d.note)}</p>` : ''}
+        <p class="text-xs text-slate-300 mt-2">即時來源過期 ${sources.filter(s => s.operational && s.state === 'stale').length} 項
+          · 即時來源警告／受阻 ${sources.filter(s => s.operational && ['warning', 'blocked'].includes(s.state)).length} 項
+          · 歷史回填警告 ${sources.filter(s => !s.operational && ['warn', 'error'].includes(s.health)).length} 項</p>`;
 
       if (!sources.length) {
         root.innerHTML = NBA.empty('尚無資料來源紀錄。階段二排程器啟動後會寫入 data_sources 表。', 'fa-plug');
         return;
       }
-      const sorted = [...sources].sort((a, b) => (SEVERITY[a.health] ?? 2) - (SEVERITY[b.health] ?? 2));
+      const sorted = [...sources].sort((a, b) => Number(b.operational !== false) - Number(a.operational !== false)
+        || (SEVERITY[a.health] ?? 2) - (SEVERITY[b.health] ?? 2));
       root.innerHTML = `<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">${sorted.map(card).join('')}</div>${HAR_HELP}`;
       loaded = true;
     } catch (e) {

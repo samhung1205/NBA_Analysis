@@ -79,6 +79,18 @@ pages.get('/decision', (c) => {
           </button>
         </div>
       </div>
+      <section class="panel mb-4" aria-labelledby="twsport-sync-title">
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 id="twsport-sync-title" class="text-sm font-semibold">台彩盤口同步</h2>
+            <p class="text-xs text-slate-400 mt-1">用已開啟的 Chrome 台彩頁面取得盤口，免匯出 HAR。</p>
+          </div>
+          <button type="button" id="twsport-sync-button" disabled class="px-3 py-2 rounded border border-slate-600 text-sm text-slate-100 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed">同步台彩盤口</button>
+        </div>
+        <p id="twsport-sync-status" role="status" aria-live="polite" class="text-xs text-slate-300 mt-3">正在確認同步功能…</p>
+        <p class="text-xs text-slate-400 mt-2"><a href="https://www.sportslottery.com.tw/sportsbook" target="_blank" rel="noopener noreferrer" class="text-orange-300 underline">開啟台彩</a> · <a href="/static/twsport-sync-help.html" target="_blank" rel="noopener noreferrer" class="text-orange-300 underline">同步助手設定與限制</a></p>
+      </section>
+      <script src="/static/js/twsport-sync.js" defer></script>
       <div id="decision-banner"></div>
       <div id="decision-summary" class="mb-4"></div>
       <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_20rem]">

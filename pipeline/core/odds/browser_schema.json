@@ -1,0 +1,5 @@
+{
+  "event": ["idfoevent", "name", "participantname_home", "participantname_away", "tsstart", "istradable", "markets"],
+  "market": ["externalreference", "externalprovider", "name", "line", "ismainline", "idfobolifestate", "istradable", "idfomarket", "idfomarkettype", "tsbetstart", "tsbetend", "selections"],
+  "selection": ["externalreference", "name", "hadvalue", "currentpriceup", "currentpricedown", "currenthandicap", "idfoselection", "idfoselectionsuspensiontype", "idfobolifestate"]
+}

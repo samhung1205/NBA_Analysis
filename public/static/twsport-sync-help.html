@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>台彩同步助手設定</title>
+  <style>body{color-scheme:dark;background:#020617;color:#e2e8f0;font:16px/1.8 system-ui,sans-serif;max-width:45rem;margin:auto;padding:2rem}a{color:#fdba74}code{overflow-wrap:anywhere}li{margin:.6rem 0}.note{color:#94a3b8}button,a:focus-visible{outline:2px solid #fdba74;outline-offset:4px}</style>
+</head>
+<body><main>
+  <h1>台彩同步助手</h1>
+  <p>在桌面 Chrome 正常開啟台彩後，回決策中心按一次同步。不需要付費資料 API、匯出 HAR 或在本機執行指令。平台不會自動下注。</p>
+  <h2>下載與安裝（只需一次）</h2>
+  <ol>
+    <li><a href="/static/downloads/nba-twsport-sync.zip" download="nba-twsport-sync.zip">下載同步助手 v1.0.0（ZIP）</a>，解壓縮取得 <code>NBA-Twsport-Sync</code> 資料夾。請保留這個資料夾；安裝後移動或刪除它，助手會無法使用。</li>
+    <li>在 Chrome 網址列輸入 <code>chrome://extensions</code>，開啟右上角「開發人員模式」。</li>
+    <li>按「載入未封裝項目」，選擇解壓縮後的 <code>NBA-Twsport-Sync</code> 資料夾（不是 ZIP）。</li>
+    <li>確認助手識別碼為 <code>kijmgoejmindnnhhkbpognmpciahnana</code>。權限僅限台彩官方的兩個網域：<code>www.sportslottery.com.tw</code> 與 <code>www-talo-ssb-pr.sportslottery.com.tw</code>。</li>
+    <li>回到本平台，登入並重新整理<a href="/decision">決策中心</a>，確認不再顯示「請使用已安裝同步助手的桌面 Chrome」。</li>
+  </ol>
+  <p class="note">這是本專案提供的本機套件，尚未上架 Chrome 線上應用程式商店。請自行審閱並載入；助手只接受本平台決策中心的要求，不需要台彩帳號密碼或 API key。</p>
+  <h2>每次同步</h2>
+  <ol>
+    <li>用同一個 Chrome 使用者設定檔<a href="https://www.sportslottery.com.tw/sportsbook" target="_blank" rel="noopener noreferrer">正常開啟台彩 NBA 盤口</a>，保持分頁開啟。</li>
+    <li>在決策中心選今日或明日，按「同步台彩盤口」，保持頁面開啟直到顯示結果。</li>
+    <li>查看實際擷取時間、匯入結果與更新後的決策。沒有正 EV 或有效額度時，成功同步仍可能沒有可操作機會。</li>
+  </ol>
+  <h2>無法同步時</h2>
+  <ul>
+    <li>助手未連線：確認使用相同的 Chrome 設定檔，助手已啟用，然後重新整理決策中心。</li>
+    <li>Python 處理器未連線：稍後重新整理；持續出現時請檢查系統狀態。</li>
+    <li>台彩阻擋、要求降低頻率或資料格式改變：助手會停止，不繞過防護；不要連續重按。HAR 保留作備援。</li>
+    <li>更新助手：下載新版並解壓縮到原資料夾，在擴充功能頁按助手的「重新載入」，再重新整理決策中心。</li>
+  </ul>
+  <p>手機未提供此流程。助手只傳送盤口必要欄位，不讀取或上傳 cookie、登入密碼、帳戶與下注紀錄。免費瀏覽不代表可轉載，盤口介面須登入才能查看。</p>
+  <p><a href="/decision">返回決策中心</a></p>
+</main></body></html>

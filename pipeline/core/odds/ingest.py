@@ -150,7 +150,7 @@ def _save_raw_sample(source: str, raw: Any, when: datetime) -> str | None:
 
 def run_odds_job(source: str, *, dry_run: bool = False, now: datetime | None = None,
                  fetch: Callable[[RunReport], dict] | None = None, fetched_at: datetime | None = None,
-                 db=None) -> RunReport:
+                 db=None, parser: Callable[[dict], Any] | None = None) -> RunReport:
     """fetch：注入的抓取函式（測試 / 檔案匯入）；fetched_at：匯入檔案時的實際觀測時間。"""
     if source not in SOURCES:
         raise ValueError(f"未知來源 {source}")
@@ -158,6 +158,8 @@ def run_odds_job(source: str, *, dry_run: bool = False, now: datetime | None = N
         from .. import db as db_mod
         db = db_mod
     meta = SOURCES[source]
+    if source == 'twsport' and parser is not None:
+        meta = {**meta, 'display_name': '台灣運彩盤口（Chrome 同步）'}
     started = ensure_utc(now or now_utc())
     report = RunReport(source=source, dry_run=dry_run)
 
@@ -202,7 +204,7 @@ def run_odds_job(source: str, *, dry_run: bool = False, now: datetime | None = N
             raw = _fetch_oddsapi(report, started)
         report.fetched_at = ensure_utc(fetched_at or now_utc())
         report.latency_ms = int((time.monotonic() - t0) * 1000)
-        _process(db, source, raw, report, dry_run=dry_run, run_id=run_id)
+        _process(db, source, raw, report, dry_run=dry_run, run_id=run_id, parser=parser)
     except OddsSourceError as e:
         report.outcome, report.error = e.outcome, str(e)[:500]
         report.diagnostics["error_detail"] = e.detail
@@ -233,8 +235,8 @@ def run_odds_job(source: str, *, dry_run: bool = False, now: datetime | None = N
     return report
 
 
-def _process(db, source: str, raw: Any, report: RunReport, *, dry_run: bool, run_id: int | None) -> None:
-    parsed = _parse(source, raw)
+def _process(db, source: str, raw: Any, report: RunReport, *, dry_run: bool, run_id: int | None, parser=None) -> None:
+    parsed = parser(raw) if parser else _parse(source, raw)
     report.diagnostics.update(parsed.diagnostics)
     listed = parsed.n_nba_events_listed if source == "twsport" else parsed.n_listed
     report.n_events = len(parsed.events)
@@ -323,6 +325,9 @@ def _heartbeat(db, report: RunReport, meta: dict) -> None:
 # ------------------------------------------------------------------ #
 
 def twsport_odds_job() -> RunReport:
+    import os
+    if os.environ.get('TWSPORT_SYNC_ENABLED') == 'true':
+        return RunReport(source='twsport', outcome='not_configured', skipped='browser_capture_only')
     return run_odds_job("twsport")
 
 

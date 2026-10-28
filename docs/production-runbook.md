@@ -5,7 +5,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
 ```
  Cloudflare Pages (Hono web + API + auth)  ──reads/writes──▶  Supabase Postgres (Session pooler, port 5432)
                                                                       ▲
- Railway "nba-scheduler" (Python, 17 jobs, always on, game-aware — §4b) ────────────────┘
+ Railway "nba-scheduler" (Python, 19 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
  The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — manual HAR import)
 ```
@@ -56,10 +56,10 @@ First boot logs (Deploy logs):
 [entrypoint] MODEL_ARTIFACT_DIR=/data/model-artifacts
 [entrypoint] No persistent production artifact found; bootstrapping...
 [entrypoint] Bootstrap artifact copied.
-... 已登錄 job：<id> — ...     (17 lines)
+... 已登錄 job：<id> — ...     (19 lines)
 ```
 
-Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured), `referee_assignments` (§4d).
+Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured), `referee_assignments` (§4d), `roster_sync`, `browser_sync` (§4e).
 
 1. **Stays alive** – no restart loop; log lines keep arriving every minute (`decision_board`).
 2. **Heartbeats / DB writes** – from your laptop (reads `pipeline/.env`, read-only):
@@ -201,6 +201,10 @@ Collects the official pre-game assignments (https://official.nba.com/referee-ass
 - Job `roster_sync`: daily Taipei 11:50 (= ET the previous night, after that day's transactions; before the 12:00 schedule sync and 12:20 early predictions). No startup catch-up (a restart does not hit stats.nba.com again). Heartbeat `data_sources.nba_rosters` expects 24 h; `warn` = some ESPN names unmatched, `error` = fetch failed / incomplete roster (nothing written).
 
 **Applied to production (2026-10-22 TPE, explicitly authorized by the user):** `0012_player_roster_sync.sql` applied alone in one transaction together with its `schema_migrations` row (`0011` was deliberately left unapplied — still in development — so `npm run db:migrate:pg` was not used). `run_roster_sync.py` applied 107 moves / 69 additions / 585 releases (source `nba_playerindex`, 0 unmatched); a dry-run right after showed 0 changes, 519 players on teams, heartbeat `nba_rosters` = `ok`. Klay Thompson and Giannis Antetokounmpo are now MIA. The website / scheduler code was not deployed.
+
+## 4e. Chrome 盤口同步（2026-10-28）
+
+免費同步改由使用者桌面 Chrome 正常開啟台彩，決策中心要求擷取後交給 Python；不需要 HAR 或付費資料 API。安裝、0013 migration、兩側旗標、登入限制與回滾注意事項見 [browser-sync-guide.md](browser-sync-guide.md)。第 19 個 `browser_sync` job 每 15 秒處理佇列，預設停用、不抓外部資料。本次已依使用者正式授權套用 0013（單一交易與版本紀錄；新表 RLS、anon／authenticated 有效權限皆拒絕）。網站／Railway 部署驗證進度及使用者安裝步驟見同步指南。
 
 ## 5. States
 

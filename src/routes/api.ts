@@ -5,8 +5,8 @@
  * 階段二把真實資料寫進同一個資料庫後，這些端點與前端都無需修改。
  */
 
-import { Hono } from 'hono'
-import type { AppBindings } from '../db'
+import { Hono, type Context } from 'hono'
+import type { AppBindings, Db } from '../db'
 import { getDb } from '../db'
 import * as q from '../db/queries'
 import {
@@ -16,10 +16,32 @@ import {
 } from '../lib/time'
 import { PRICING_VERSION, legacyEdges, shapePricing } from '../lib/pricing'
 import { RISK_POLICY_VERSION, attachSizing, shapeDaySizing } from '../lib/sizing'
+import { classifySource } from '../lib/source-health'
+import { getCurrentUser } from '../lib/auth'
 
-type Env = { Bindings: AppBindings }
+type Env = { Bindings: AppBindings; Variables: { requestDb: Db } }
 
 const api = new Hono<Env>()
+
+// Reuse only within this request; never share Postgres sockets between Workers requests.
+async function requestDb(c: Context<Env>) {
+  let db = c.get('requestDb')
+  if (!db) { db = await getDb(c.env); c.set('requestDb', db) }
+  return db
+}
+
+// Keep captured odds private even after sync is disabled. The worker's first heartbeat is a durable marker.
+api.use('*', async (c, next) => {
+  if (/^\/(games(?:\/|$)|odds\/|sizing(?:\/|$))/.test(c.req.path.replace(/^\/api/, ''))) {
+    c.header('Cache-Control', 'no-store')
+    if (!(await getCurrentUser(c))) {
+      const privateOdds = c.env.TWSPORT_SYNC_ENABLED === 'true' ||
+        !!(await (await requestDb(c)).one("SELECT source_key FROM data_sources WHERE source_key = 'browser_sync'"))
+      if (privateOdds) return c.json({ error: 'unauthorized', message: '請登入查看賽事與盤口資料' }, 401)
+    }
+  }
+  await next()
+})
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -252,21 +274,21 @@ async function buildGameList(db: any, tpeDate: string) {
 /* ------------------------------------------------------------------ */
 
 api.get('/games/tomorrow', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const date = tomorrowTpe()
   return c.json({ tpe_date: date, games: await buildGameList(db, date) })
 })
 
 /** GET /api/games/today — 今日賽事（總覽頁切換用） */
 api.get('/games/today', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const date = todayTpe()
   return c.json({ tpe_date: date, games: await buildGameList(db, date) })
 })
 
 /** GET /api/games?date=YYYY-MM-DD — 任意台灣日期 */
 api.get('/games', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const date = c.req.query('date') || todayTpe()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return c.json({ error: 'date 格式須為 YYYY-MM-DD（台灣時間）' }, 400)
@@ -279,7 +301,7 @@ api.get('/games', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/games/:id', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const id = Number(c.req.param('id'))
   if (!Number.isInteger(id)) return c.json({ error: 'invalid game id' }, 400)
 
@@ -341,7 +363,7 @@ function oddsMapToList(map: Map<number, any[]>, id: number) {
 
 /** 該台灣日期最新一次 sizing 的全部 outcome 與單日 / 單場 exposure（Python 計算；只讀、不排序、不推薦） */
 api.get('/sizing', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const date = c.req.query('date') || tomorrowTpe()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return c.json({ error: 'date 格式須為 YYYY-MM-DD（台灣時間 betting day）' }, 400)
@@ -354,7 +376,7 @@ api.get('/sizing', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/injuries/today', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const date = c.req.query('date') || todayTpe()
   const rows = await q.getInjuriesByTpeDate(db, date)
 
@@ -397,7 +419,7 @@ api.get('/injuries/today', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/predictions/:gameId', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const gameId = Number(c.req.param('gameId'))
   if (!Number.isInteger(gameId)) return c.json({ error: 'invalid game id' }, 400)
   const pred = await q.getLatestPredictionForGame(db, gameId)
@@ -410,7 +432,7 @@ api.get('/predictions/:gameId', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/odds/:gameId', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const gameId = Number(c.req.param('gameId'))
   if (!Number.isInteger(gameId)) return c.json({ error: 'invalid game id' }, 400)
   const rows = (await q.getOddsHistory(db, gameId)).map(shapeOdds)
@@ -449,7 +471,7 @@ api.get('/odds/:gameId', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/system/status', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const rows = await q.getDataSources(db)
   const now = Date.now()
 
@@ -457,8 +479,6 @@ api.get('/system/status', async (c) => {
     const last = r.last_success_at ? new Date(r.last_success_at).getTime() : null
     const ageMin = last ? Math.round((now - last) / 60000) : null
     const expected = r.expected_interval_min ?? null
-    // 過期判定：超過預期間隔 2 倍視為 stale
-    const stale = ageMin != null && expected != null ? ageMin > expected * 2 : null
     return {
       source_key: r.source_key,
       display_name: r.display_name,
@@ -471,30 +491,23 @@ api.get('/system/status', async (c) => {
       records_updated: r.records_updated,
       last_outcome: r.last_outcome ?? null, // D.1：success / partial / no_nba_markets / parser_changed / quota_low …
       age_minutes: ageMin,
-      stale,
-      // 健康度：排程器回報的狀態優先，其次才用「資料是否過期」推斷
-      health:
-        r.last_status === 'error'
-          ? 'error'
-          : r.last_status === 'warn' || stale
-            ? 'warn'
-            : r.last_status === 'ok'
-              ? 'ok'
-              : 'unknown',
+      ...classifySource(r, rows, now),
     }
   })
 
   return c.json({
     checked_at: new Date().toISOString(),
     db_driver: db.driver,
-    stage: 'stage-1',
-    note: '資料來源狀態由階段二排程器寫入 data_sources 表；目前為 seed 資料。',
+    stage: 'stage-2',
+    note: db.driver === 'd1'
+      ? '本機 D1 開發資料；狀態不代表正式環境。'
+      : '來源狀態由 Python 排程器記錄；歷史回填、備援待命與排程休息不等於即時資料過期。',
     overall:
-      sources.some((s) => s.health === 'error')
+      sources.some((s) => s.operational && s.health === 'error')
         ? 'error'
-        : sources.some((s) => s.health === 'warn')
+        : sources.some((s) => s.operational && s.health === 'warn')
           ? 'warn'
-          : 'ok',
+          : sources.some((s) => s.operational && s.health === 'ok') ? 'ok' : 'unknown',
     sources,
   })
 })
@@ -504,13 +517,13 @@ api.get('/system/status', async (c) => {
 /* ------------------------------------------------------------------ */
 
 api.get('/metrics', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   const rows = await q.getModelMetrics(db)
   return c.json({ metrics: rows })
 })
 
 api.get('/teams', async (c) => {
-  const db = await getDb(c.env)
+  const db = await requestDb(c)
   return c.json({ teams: await q.getAllTeams(db) })
 })
 

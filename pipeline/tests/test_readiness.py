@@ -61,6 +61,14 @@ def test_twsport_disabled_or_blocked_is_blocked_not_fail():
     assert rd.classify_twsport(hb(5, outcome=None), None, NOW, enabled=True, games_in_window=0)[0] == rd.WAITING
 
 
+def test_browser_sync_readiness_does_not_claim_missing_or_stale_quotes_are_ready():
+    args = dict(enabled=False, browser_sync=True, games_in_window=3)
+    assert rd.classify_twsport(None, None, NOW, **args)[0] == rd.WAITING
+    assert rd.classify_twsport(None, NOW, NOW, **args)[0] == rd.PASS
+    assert rd.classify_twsport(None, NOW-timedelta(hours=2), NOW, **args)[0] == rd.WARN
+    assert rd.classify_twsport(None, NOW+timedelta(minutes=1), NOW, **args)[0] == rd.WARN
+
+
 def test_oddsapi_states():
     c = dict(key_set=True, warn_at=100, reserve=25, post_deploy=True)
     assert rd.classify_oddsapi(hb(60, outcome="no_nba_markets"), None, NOW, **c)[0] == rd.WAITING

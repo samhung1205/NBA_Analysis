@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-10-28T10:50:01.676Z",
+        "reason": "Agent decision: preserve the incumbent typography for this scoped injury-layout and status-label fix; git HEAD already defines Inter in public/static/style.css:10, and typography redesign is outside the user request."
+      }
+    ]
+  }
+}

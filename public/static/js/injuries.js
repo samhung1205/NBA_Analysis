@@ -14,8 +14,8 @@
       .map(
         (p) => `<tr class="${p.key_absence_alert ? 'bg-red-950/20' : ''}">
         <td class="text-xs">
-          ${NBA.esc(p.name || '—')}
-          ${p.is_starter ? '<span class="text-xs text-amber-400 ml-1">主力</span>' : ''}
+          <span class="injury-player">${NBA.esc(p.name || '—')}
+          ${p.is_starter ? '<span class="injury-starter text-amber-400">主力</span>' : ''}</span>
         </td>
         <td class="text-xs text-slate-400">${NBA.esc(p.position || '—')}</td>
         <td>${NBA.statusBadge(p.status)}</td>
@@ -26,7 +26,7 @@
       .join('');
 
     return `
-    <article class="rounded-xl border ${alert ? 'border-red-900/60' : 'border-slate-800'} bg-slate-900/60 overflow-hidden">
+    <article class="min-w-0 rounded-xl border ${alert ? 'border-red-900/60' : 'border-slate-800'} bg-slate-900/60 overflow-hidden">
       <header class="flex items-center justify-between px-4 py-2.5 border-b border-slate-800">
         <h3 class="font-semibold text-sm">
           <span class="text-slate-400 text-xs mr-1.5">${NBA.esc(t.team.abbr || '')}</span>
@@ -38,8 +38,8 @@
             : `<span class="text-xs text-slate-400">${t.players.length} 筆申報</span>`
         }
       </header>
-      <div class="overflow-x-auto">
-        <table class="stat-table text-sm">
+      <div class="overflow-x-auto" role="region" tabindex="0" aria-label="${NBA.esc(NBA.teamName(t.team))}傷病名單，可左右捲動">
+        <table class="stat-table injuries-table text-sm">
           <thead><tr><th>球員</th><th>位置</th><th>狀態</th><th>原因</th><th>申報時間</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>

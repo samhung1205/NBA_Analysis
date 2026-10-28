@@ -104,11 +104,19 @@ def classify_oddsapi(row: dict | None, last_run: dict | None, now: datetime, *, 
 
 
 def classify_twsport(row: dict | None, newest_snapshot_at: datetime | None, now: datetime, *, enabled: bool,
-                     games_in_window: int) -> tuple[str, str]:
+                     games_in_window: int, browser_sync: bool = False) -> tuple[str, str]:
     """台彩是 actionable market，但自動爬取被 Cloudflare 擋（不繞過）→ 預期 BLOCKED / 手動 HAR。"""
     snap_age = age_minutes(newest_snapshot_at, now)
     snap_txt = ("尚無任何台彩盤口快照" if snap_age is None
                 else f"最新台彩快照 {snap_age / 60:.1f} 小時前")
+    if browser_sync:
+        from ..sizing.policy import RISK_V1
+        limit = RISK_V1.max_quote_age('twsport').total_seconds() / 60
+        if snap_age is None:
+            return WAITING, "Chrome 同步模式：等待使用者在決策中心匯入盤口"
+        if snap_age < 0 or snap_age > limit:
+            return WARN if games_in_window else WAITING, f"Chrome 同步模式：請重新同步盤口。{snap_txt}"
+        return PASS, f"Chrome 同步模式；僅代表來源最近有觀測，額度仍須決策中心驗證。{snap_txt}"
     if not enabled:
         return BLOCKED, f"自動爬取已停用（TWSPORT_ENABLED=false；預期）→ 手動 HAR 匯入。{snap_txt}"
     outcome = (row or {}).get("last_outcome")
@@ -355,13 +363,14 @@ def check_efficiency(cur, now: datetime, artifact_root: Path | None = None) -> l
 def check_odds(cur, now: datetime, env: dict[str, str], post_deploy: bool) -> list[Check]:
     cur.execute("SELECT * FROM data_sources WHERE source_key IN ('twsport', 'oddsapi')")
     rows = {r["source_key"]: r for r in cur.fetchall()}
-    cur.execute("SELECT source, COUNT(*) AS n, MAX(fetched_at) AS newest FROM odds_snapshots GROUP BY source")
+    cur.execute("SELECT source, COUNT(*) AS n, MAX(COALESCE(last_seen_at, fetched_at)) AS newest FROM odds_snapshots GROUP BY source")
     snaps = {r["source"]: r for r in cur.fetchall()}
     win = int(_val(cur, "SELECT COUNT(*) FROM games WHERE date_utc > %s AND date_utc <= %s AND status <> 'final'",
                    (now, now + timedelta(hours=48))))
     tw_enabled = (env.get("TWSPORT_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
     st, d = classify_twsport(rows.get("twsport"), (snaps.get("twsport") or {}).get("newest"), now,
-                             enabled=tw_enabled, games_in_window=win)
+                             enabled=tw_enabled, games_in_window=win,
+                             browser_sync=env.get('TWSPORT_SYNC_ENABLED') == 'true')
     out = [Check("odds", "twsport (actionable)", st, d + f"；累計 {(snaps.get('twsport') or {}).get('n', 0)} 筆快照")]
     last_run = _one(cur, "SELECT quota_remaining, quota_used, outcome, started_at FROM odds_fetch_runs "
                          "WHERE source = 'oddsapi' AND quota_remaining IS NOT NULL ORDER BY started_at DESC LIMIT 1")

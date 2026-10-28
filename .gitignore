@@ -1,5 +1,6 @@
 # prod
 dist/
+.browser-extension/
 
 # dev
 .yarn/
