@@ -55,3 +55,9 @@ e9e5510 的真實工作 57abc6b4-624a-48a9-9bb5-c816aaa49320 已匯入 12 場／
 pricing／sizing 的 persist 改用既有 Psycopg 3.2.10 executemany：沿用相同順序、欄位、ON CONFLICT DO NOTHING、呼叫端交易與完整候選集合，減少逐列網路往返。模型、EV、Kelly、風控比例、quote TTL、盤口時間與稽核資料均不變。[Psycopg 官方契約](https://www.psycopg.org/psycopg3/docs/api/cursors.html)規定未使用 returning 時 rowcount 是累計影響列數，據此維持新增／既有計數。
 
 純 Python 同步測試 27 passed（鎖衝突後成功、持續 busy 上限、非 busy 不重試、lease 邊界）；網站同步測試 29 passed（含完整匯入但決策未確認的文案），build 通過。隔離 Postgres 的同步、pricing 與 sizing 共 15 passed，包含與純計算值一致、版本／組合改變保留舊列、重跑冪等、過期不可操作及 as-of 邊界。最新正式實測結果另記。
+
+bb95099 已正式部署（Pages f7088a23、Railway 49f5bce6），工作 7caf6b6c-06fd-4b60-9507-a2aab418b628 的收據證實：12 場／72 市場、stale/rejected=0、pricing errors=0、sizing pricing_missing=0；decision 連續十五次 busy，因此保留 partial 並清除 inbox。由此才能確認最後是物化鎖占用，非盤口部分匯入。唯讀 pg_stat_activity 分類顯示持鎖交易正逐列 INSERT decision_opportunities，交易已超過 180 秒。
+
+接著將同一快照的 decision_opportunities 改為 executemany；原有新 snapshot 判定、day-start 凍結、bets 補填、欄位順序、完整選項集合與 REPEATABLE READ 原子交易均不變。失敗仍整筆快照回滾，不以放寬額度有效期或忽略鎖取得成功。
+
+決策批次寫入的三項隔離 Postgres 回歸全部通過：完整物化與重跑冪等、已記錄下注建立新快照與補填基準、日初資金凍結與 dry-run 不寫入。正式部署後另做真實 Chrome 驗收。

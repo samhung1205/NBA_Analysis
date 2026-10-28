@@ -288,10 +288,12 @@ def persist_board(cur, res: board.BoardResult, now: datetime) -> tuple[bool, int
     sid = r["id"]
     ocols = ", ".join(OPP_COLUMNS)
     oph = ", ".join("%s::jsonb" if c in OPP_JSON else "%s" for c in OPP_COLUMNS)
+    values = []
     for o in res.opportunities:
         row = {**o, "snapshot_id": sid, "user_id": snap["user_id"], "betting_day": snap["betting_day"]}
-        cur.execute(f"INSERT INTO decision_opportunities ({ocols}) VALUES ({oph})",
-                    tuple(_j(row.get(c)) if c in OPP_JSON else row.get(c) for c in OPP_COLUMNS))
+        values.append(tuple(_j(row.get(c)) if c in OPP_JSON else row.get(c) for c in OPP_COLUMNS))
+    if values:
+        cur.executemany(f"INSERT INTO decision_opportunities ({ocols}) VALUES ({oph})", values)
     return True, new_days, filled
 
 
