@@ -11,7 +11,7 @@
     const home = NBA.teamName(g.home), away = NBA.teamName(g.away);
     return `
     <section id="game-header" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <div class="flex items-center gap-2 text-xs text-slate-500 mb-2">
+      <div class="flex items-center gap-2 text-xs text-slate-400 mb-2">
         <a href="/" class="hover:text-slate-300"><i class="fas fa-arrow-left mr-1"></i>返回總覽</a>
         <span>·</span><span>${NBA.tpe(g.date_utc)}</span>
         ${NBA.gameStatusBadge(g.status)}
@@ -21,10 +21,10 @@
       <div class="flex items-end justify-between gap-4 flex-wrap">
         <h1 class="text-xl sm:text-2xl font-bold">
           <span class="text-slate-300">${NBA.esc(away)}</span>
-          <span class="text-slate-600 mx-2 text-base">@</span>
+          <span class="text-slate-400 mx-2 text-base">@</span>
           <span class="text-white">${NBA.esc(home)}</span>
         </h1>
-        ${g.score.home != null ? `<div class="num text-2xl font-bold">${g.score.away} <span class="text-slate-600">-</span> ${g.score.home}</div>` : ''}
+        ${g.score.home != null ? `<div class="num text-2xl font-bold">${g.score.away} <span class="text-slate-400">-</span> ${g.score.home}</div>` : ''}
       </div>
       ${
         p
@@ -34,17 +34,17 @@
         ${statBox('預測總分', NBA.fixed(p.pred_total))}
         ${statBox('信心度', NBA.pct(p.confidence))}
       </div>
-      <p class="text-[11px] text-slate-500 mt-2">模型 ${NBA.esc(p.model_version)} · 產出時間 ${NBA.tpe(p.created_at)}</p>`
-          : `<p class="mt-4 text-sm text-slate-500"><i class="fas fa-hourglass-half mr-1"></i>尚無模型預測</p>`
+      <p class="text-xs text-slate-400 mt-2">模型 ${NBA.esc(p.model_version)} · 產出時間 ${NBA.tpe(p.created_at)}</p>`
+          : `<p class="mt-4 text-sm text-slate-400"><i class="fas fa-hourglass-half mr-1"></i>尚無模型預測</p>`
       }
     </section>`;
   }
 
   function statBox(label, value, cls = '', bar = null) {
     return `<div class="rounded-lg bg-slate-800/50 p-3">
-      <div class="text-[10px] text-slate-500 mb-1">${label}</div>
+      <div class="text-xs text-slate-400 mb-1">${label}</div>
       <div class="text-lg font-bold num ${cls}">${value}</div>
-      ${bar != null ? `<div class="prob-bar mt-1.5"><span style="width:${((bar ?? 0) * 100).toFixed(1)}%"></span></div>` : ''}
+      ${bar != null ? `<div class="prob-bar mt-1.5" aria-hidden="true"><span style="transform:scaleX(${Math.min(1, Math.max(0, bar ?? 0)).toFixed(3)})"></span></div>` : ''}
     </div>`;
   }
 
@@ -69,7 +69,7 @@
       const tot = h1 != null && h2 != null ? h1 + h2 : null;
       return `<tr class="text-orange-300/90">
         <td class="font-medium">${NBA.esc(NBA.teamName(g[side]))} 預測</td>
-        <td colspan="5" class="text-slate-600 text-xs">階段二半場模型輸出（逐節預測為 Phase E 選做）</td>
+        <td colspan="5" class="text-slate-400 text-xs">階段二半場模型輸出（逐節預測為 Phase E 選做）</td>
         <td class="font-semibold">${NBA.fixed(h1)}</td>
         <td class="font-semibold">${NBA.fixed(h2)}</td>
         <td class="font-bold">${NBA.fixed(tot)}</td>
@@ -77,7 +77,7 @@
     };
     return `
     <section id="period-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-table-cells mr-1.5 text-slate-500"></i>逐節 / 半場</h2>
+      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-table-cells mr-1.5 text-slate-400"></i>逐節 / 半場</h2>
       <div class="overflow-x-auto">
         <table class="stat-table text-sm">
           <thead><tr><th>隊伍</th><th>Q1</th><th>Q2</th><th>Q3</th><th>Q4</th><th>OT</th><th>上半</th><th>下半</th><th>總分</th></tr></thead>
@@ -94,8 +94,8 @@
     const f = p?.features;
     if (!f) {
       return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-        <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-lightbulb mr-1.5 text-slate-500"></i>特徵拆解：為什麼這樣預測</h2>
-        <p class="text-sm text-slate-500">尚無特徵資料。階段二會將特徵寫入 <code class="text-slate-400">predictions.features_json</code>，此區塊自動呈現。</p>
+        <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-lightbulb mr-1.5 text-slate-400"></i>特徵拆解：為什麼這樣預測</h2>
+        <p class="text-sm text-slate-400">尚無特徵資料。階段二會將特徵寫入 <code class="text-slate-400">predictions.features_json</code>，此區塊自動呈現。</p>
       </section>`;
     }
 
@@ -134,11 +134,11 @@
 
     return `
     <section id="feature-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-lightbulb mr-1.5 text-slate-500"></i>特徵拆解：為什麼這樣預測</h2>
+      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-lightbulb mr-1.5 text-slate-400"></i>特徵拆解：為什麼這樣預測</h2>
       ${
         contribBars
           ? `<div class="mb-4">
-               <div class="flex justify-between text-[10px] text-slate-500 mb-1"><span>← 不利主隊</span><span>有利主隊 →</span></div>
+               <div class="flex justify-between text-xs text-slate-400 mb-1"><span>← 不利主隊</span><span>有利主隊 →</span></div>
                ${contribBars}
              </div>`
           : ''
@@ -158,13 +158,13 @@
   function oddsSection(d) {
     const pr = d.odds?.pricing;
     const markets = pr?.markets || [];
-    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-scale-balanced mr-1.5 text-slate-500"></i>盤口定價（去水 / 模型 / Edge / EV）</h2>`;
+    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-scale-balanced mr-1.5 text-slate-400"></i>盤口定價（去水 / 模型 / Edge / EV）</h2>`;
     if (!markets.length) {
       const msg = pr?.status === 'unavailable'
         ? '定價資料表尚未建立（migration 0005）。'
         : pr?.status === 'not_priced' ? '已有盤口，尚待定價工作計算（每 5 分鐘）。' : '尚無盤口資料。';
       return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">${head}
-        <p class="text-sm text-slate-500">${msg}</p></section>`;
+        <p class="text-sm text-slate-400">${msg}</p></section>`;
     }
     const g = d.game;
     const sideLabel = (s) =>
@@ -180,8 +180,8 @@
     const rows = markets
       .map((m) => {
         const note = m.status !== 'priced'
-          ? `<div class="text-[10px] text-amber-400/80">${NBA.esc(statusText[m.status] || m.status)}</div>`
-          : (m.warnings || []).length ? `<div class="text-[10px] text-amber-400/80">${NBA.esc(m.warnings.join(', '))}</div>` : '';
+          ? `<div class="text-xs text-amber-400/80">${NBA.esc(statusText[m.status] || m.status)}</div>`
+          : (m.warnings || []).length ? `<div class="text-xs text-amber-400/80">${NBA.esc(m.warnings.join(', '))}</div>` : '';
         return m.outcomes
           .map((o, i) => `<tr class="${i === 0 ? 'border-t border-slate-800' : ''}">
           <td class="text-xs text-slate-400">${i === 0 ? NBA.esc(bookLabel(m)) : ''}</td>
@@ -189,13 +189,13 @@
           <td class="text-xs">${NBA.esc(sideLabel(o.side))}</td>
           <td class="text-xs num">${o.display_line != null ? (m.market_type === 'total' ? NBA.fixed(o.display_line) : NBA.signed(o.display_line)) : '—'}</td>
           <td class="text-xs num">${NBA.odds(o.decimal_odds)}</td>
-          <td class="text-xs num text-slate-500">${pct(o.raw_implied_prob)}</td>
+          <td class="text-xs num text-slate-400">${pct(o.raw_implied_prob)}</td>
           <td class="text-xs num text-slate-400">${pct(o.fair_no_vig_prob)}</td>
           <td class="text-xs num text-orange-300">${pct(o.model_prob)}</td>
-          <td class="text-xs num text-slate-500">${o.push_prob ? pct(o.push_prob) : o.model_prob != null ? '0' : '—'}</td>
+          <td class="text-xs num text-slate-400">${o.push_prob ? pct(o.push_prob) : o.model_prob != null ? '0' : '—'}</td>
           <td class="text-right">${o.edge_vs_fair != null ? NBA.edgeBadge(NBA.edgeTierOf(o.edge_vs_fair), NBA.signed(o.edge_vs_fair * 100, 1) + '%') : '—'}</td>
           <td class="text-xs num text-right ${o.ev_per_unit > 0 ? 'text-green-400' : 'text-slate-400'}">${o.ev_per_unit != null ? NBA.signed(o.ev_per_unit * 100, 1) + '%' : '—'}</td>
-          <td class="text-xs num text-right text-slate-500">${i === 0 ? pct(m.market_overround) : ''}</td>
+          <td class="text-xs num text-right text-slate-400">${i === 0 ? pct(m.market_overround) : ''}</td>
         </tr>`)
           .join('');
       })
@@ -204,7 +204,7 @@
     return `
     <section id="odds-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
       ${head}
-      <p class="text-[11px] text-slate-500 mb-3">
+      <p class="text-xs text-slate-400 mb-3">
         原始隱含 = 1/賠率（含水）；去水公允 = 同一盤口全部選項一起比例去水（${NBA.esc(pr.no_vig_method)}）；
         模型 = C.5E 分佈的 P(勝)；Push = 整數線退款機率；Edge = 模型 − 去水公允；EV = 以實際賠率每投注 1 單位的期望值。
         各 bookmaker 分開計算，不平均、不挑最佳盤；本表不是投注建議。
@@ -224,8 +224,8 @@
    * 用語中性：理論注碼 / risk-adjusted stake；不是投注建議、不是推薦清單。
    */
   const SIZING_STATUS = {
-    eligible: ['合格', 'low'],
-    exposure_scaled: ['合格（exposure 縮放）', 'low'],
+    eligible: ['理論合格', 'low'],
+    exposure_scaled: ['理論合格（已縮放）', 'low'],
     no_positive_ev: ['EV ≤ 0', 'none'],
     stale_quote: ['報價過舊', 'none'],
     unsupported_settlement: ['結算不支援', 'none'],
@@ -239,14 +239,14 @@
   function sizingSection(d) {
     const sz = d.odds?.sizing;
     const markets = d.odds?.pricing?.markets || [];
-    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-shield-halved mr-1.5 text-slate-500"></i>理論注碼（risk-adjusted stake，bankroll 比例）</h2>`;
+    const head = `<h2 class="text-sm font-semibold text-slate-300 mb-1"><i class="fas fa-shield-halved mr-1.5 text-slate-400"></i>理論注碼（risk-adjusted stake，bankroll 比例）</h2>`;
     const rowsData = markets.flatMap((m) => m.outcomes.filter((o) => o.sizing).map((o) => ({ m, o, s: o.sizing })));
     if (!sz || !rowsData.length) {
       const msg = sz?.status === 'unavailable'
         ? 'sizing 資料表尚未建立（migration 0006）。'
         : '尚無 sizing 結果（定價後由排程計算）。';
       return `<section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">${head}
-        <p class="text-sm text-slate-500">${msg}</p></section>`;
+        <p class="text-sm text-slate-400">${msg}</p></section>`;
     }
     const g = d.game;
     const sideLabel = (x) =>
@@ -258,8 +258,10 @@
     const de = sz.daily_exposure || {};
     const rows = rowsData
       .map(({ m, o, s }) => {
-        const [label, cls] = SIZING_STATUS[s.qualification_status] || [s.qualification_status, 'none'];
-        const notes = [...(s.reasons || []), ...(s.warnings || [])].join(', ');
+        // 國際盤只作診斷：不標「合格」、不強調最終比例（不是台彩證據，也沒有額度）
+        const intl = m.source !== 'twsport';
+        const [label, cls] = intl ? ['僅診斷（國際盤）', 'none'] : SIZING_STATUS[s.qualification_status] || [s.qualification_status, 'none'];
+        const notes = [...(s.reasons || []), ...(s.warnings || [])].map((c) => NBA.reasonText(c)).join('、');
         return `<tr>
           <td class="text-xs text-slate-400">${NBA.esc(bookLabel(m))}</td>
           <td class="text-xs text-slate-300">${NBA.esc(m.market_label || m.market)}</td>
@@ -270,30 +272,32 @@
           <td class="text-xs num text-right text-slate-400">${pct(s.full_kelly_fraction)}</td>
           <td class="text-xs num text-right text-slate-400">${pct(s.fractional_kelly_fraction)}</td>
           <td class="text-xs num text-right text-slate-400">${pct(s.single_bet_capped_fraction)}</td>
-          <td class="text-xs num text-right ${s.actionable ? 'text-orange-300 font-semibold' : 'text-slate-600'}">${pct(s.final_stake_fraction)}</td>
+          <td class="text-xs num text-right ${s.actionable && !intl ? 'text-slate-100 font-semibold' : 'text-slate-400'}">${pct(s.final_stake_fraction)}</td>
           <td class="text-right">${NBA.edgeBadge(cls, label)}</td>
-          <td class="text-[10px] text-slate-500 max-w-[16rem]">${NBA.esc(notes)}</td>
+          <td class="text-xs text-slate-400 max-w-[16rem]">${NBA.esc(notes)}</td>
         </tr>`;
       })
       .join('');
     return `
     <section id="sizing-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
       ${head}
-      <p class="text-[11px] text-slate-500 mb-2">
+      <p class="text-xs text-slate-400 mb-2">
         ${NBA.esc(pol.risk_policy_version || sz.risk_policy_version)}：push-aware full Kelly（只用 P(勝)、P(退款)、P(輸) 與實際賠率，不用 edge）
         → Kelly × ${NBA.fixed(pol.kelly_multiplier, 2)} → 單筆上限 ${pct(pol.max_bet_fraction, 0)}
         → 同場合計上限 ${pct(pol.max_game_fraction, 0)} → 單日（台灣日期）合計上限 ${pct(pol.max_day_fraction, 0)}，超過時等比例縮放。
         資料品質旗標只顯示警示、不調整注碼。這是理論計算，不是投注建議。
       </p>
-      <div class="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-400 mb-3">
+      <p class="text-xs text-slate-300 mb-3"><i class="fas fa-compass mr-1 text-slate-400" aria-hidden="true"></i>這裡的比例<strong>還沒扣掉你已實際下注的額度</strong>；實際能下多少請看
+        <a href="/decision?date=${encodeURIComponent(sz.betting_day || '')}" class="text-orange-300 underline underline-offset-2">決策中心</a>。</p>
+      <div class="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-400 mb-3">
         <span>betting day <span class="num text-slate-200">${NBA.esc(sz.betting_day || '—')}</span></span>
         <span>同場 exposure <span class="num text-slate-200">${pct(ge.before)} → ${pct(ge.after)}</span>（縮放 × ${NBA.fixed(ge.scale_factor, 3)}）</span>
         <span>單日 exposure <span class="num text-slate-200">${pct(de.before)} → ${pct(de.after)}</span>（縮放 × ${NBA.fixed(de.scale_factor, 3)}）</span>
-        <span class="text-slate-600">計算時點 ${NBA.esc(NBA.tpe(sz.analysis_as_of))}</span>
+        <span class="text-slate-400">計算時點 ${NBA.esc(NBA.tpe(sz.analysis_as_of))}</span>
       </div>
       <div class="overflow-x-auto">
         <table class="stat-table text-sm">
-          <thead><tr><th>來源</th><th>玩法</th><th>選項</th><th>賠率</th><th>P(勝 / 退 / 輸)</th><th class="text-right">EV</th><th class="text-right">Full Kelly</th><th class="text-right">分數 Kelly</th><th class="text-right">單筆上限後</th><th class="text-right">最終（風險調整）</th><th class="text-right">資格</th><th>原因 / 警示</th></tr></thead>
+          <thead><tr><th>來源</th><th>玩法</th><th>選項</th><th>賠率</th><th>P(勝 / 退 / 輸)</th><th class="text-right">EV</th><th class="text-right">Full Kelly</th><th class="text-right">分數 Kelly</th><th class="text-right">單筆上限後</th><th class="text-right">理論最終（未扣已下注）</th><th class="text-right">資格</th><th>原因 / 警示</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -305,7 +309,7 @@
     return `
     <section id="odds-chart-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
       <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <h2 class="text-sm font-semibold text-slate-300"><i class="fas fa-chart-line mr-1.5 text-slate-500"></i>盤口變動歷史</h2>
+        <h2 class="text-sm font-semibold text-slate-300"><i class="fas fa-chart-line mr-1.5 text-slate-400"></i>盤口變動歷史</h2>
         <select id="chart-market" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs">
           <option value="spread">讓分盤線</option>
           <option value="total">大小分盤線</option>
@@ -314,8 +318,8 @@
           <option value="h1_total">上半場大小</option>
         </select>
       </div>
-      <div class="relative h-64"><canvas id="odds-chart"></canvas></div>
-      <p id="chart-empty" class="text-sm text-slate-500 hidden">此玩法尚無盤口快照歷史。</p>
+      <div class="relative h-64"><canvas id="odds-chart" role="img" aria-label="盤口變動歷史圖表">盤口變動歷史圖表</canvas></div>
+      <p id="chart-empty" class="text-sm text-slate-400 hidden">此玩法尚無盤口快照歷史。</p>
     </section>`;
   }
 
@@ -332,6 +336,7 @@
     }
     canvas.classList.remove('hidden');
     emptyEl.classList.add('hidden');
+    canvas.setAttribute('aria-label', `盤口變動歷史圖表：${series.length} 條賠率序列（${series.map((s) => s.source === 'twsport' ? '台彩' : s.bookmaker || s.source).filter((v, i, a) => a.indexOf(v) === i).join('、')}）`);
 
     const colors = { twsport: '#f97316', oddsapi: '#38bdf8', pinnacle: '#a78bfa' };
     const datasets = [];
@@ -404,7 +409,7 @@
       const oppTeam = isHome ? game.away : game.home;
       const win = my != null && opp != null && my > opp;
       return `<tr>
-        <td class="text-xs text-slate-500">${NBA.tpe(game.date_utc).slice(0, 9)}</td>
+        <td class="text-xs text-slate-400">${NBA.tpe(game.date_utc).slice(0, 9)}</td>
         <td class="text-xs">${isHome ? '主' : '客'} vs ${NBA.esc(NBA.teamName(oppTeam))}</td>
         <td class="text-xs num">${my ?? '—'}-${opp ?? '—'}</td>
         <td class="text-xs font-semibold ${win ? 'text-green-400' : 'text-red-400'}">${my == null ? '—' : win ? 'W' : 'L'}</td>
@@ -425,7 +430,7 @@
     const h2hRows = d.head_to_head
       .map(
         (gm) => `<tr>
-        <td class="text-xs text-slate-500">${NBA.tpe(gm.date_utc).slice(0, 9)}</td>
+        <td class="text-xs text-slate-400">${NBA.tpe(gm.date_utc).slice(0, 9)}</td>
         <td class="text-xs">${NBA.matchup(gm.away, gm.home)}</td>
         <td class="text-xs num">${gm.score.away ?? '—'} - ${gm.score.home ?? '—'}</td>
         <td class="text-xs num text-slate-400">${gm.score.home != null && gm.score.away != null ? gm.score.home + gm.score.away : '—'}</td>
@@ -437,19 +442,19 @@
     <div class="grid gap-5 lg:grid-cols-3 mb-5">
       <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 class="text-sm font-semibold text-slate-300 mb-1">${NBA.esc(NBA.teamName(g.away))} 近況</h2>
-        <p class="text-xs text-slate-500 mb-2">近 ${d.recent_form.away.length} 場 ${recordOf(d.recent_form.away, g.away.id)}</p>
-        <table class="stat-table">${d.recent_form.away.map((gm) => row(gm, g.away.id)).join('') || '<tr><td class="text-xs text-slate-600">無資料</td></tr>'}</table>
+        <p class="text-xs text-slate-400 mb-2">近 ${d.recent_form.away.length} 場 ${recordOf(d.recent_form.away, g.away.id)}</p>
+        <table class="stat-table">${d.recent_form.away.map((gm) => row(gm, g.away.id)).join('') || '<tr><td class="text-xs text-slate-400">無資料</td></tr>'}</table>
       </section>
       <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 class="text-sm font-semibold text-slate-300 mb-1">${NBA.esc(NBA.teamName(g.home))} 近況</h2>
-        <p class="text-xs text-slate-500 mb-2">近 ${d.recent_form.home.length} 場 ${recordOf(d.recent_form.home, g.home.id)}</p>
-        <table class="stat-table">${d.recent_form.home.map((gm) => row(gm, g.home.id)).join('') || '<tr><td class="text-xs text-slate-600">無資料</td></tr>'}</table>
+        <p class="text-xs text-slate-400 mb-2">近 ${d.recent_form.home.length} 場 ${recordOf(d.recent_form.home, g.home.id)}</p>
+        <table class="stat-table">${d.recent_form.home.map((gm) => row(gm, g.home.id)).join('') || '<tr><td class="text-xs text-slate-400">無資料</td></tr>'}</table>
       </section>
       <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
         <h2 class="text-sm font-semibold text-slate-300 mb-1">歷史對戰 H2H</h2>
-        <p class="text-xs text-slate-500 mb-2">最近 ${d.head_to_head.length} 次交手</p>
+        <p class="text-xs text-slate-400 mb-2">最近 ${d.head_to_head.length} 次交手</p>
         <table class="stat-table">
-          ${h2hRows || '<tr><td class="text-xs text-slate-600">無資料</td></tr>'}
+          ${h2hRows || '<tr><td class="text-xs text-slate-400">無資料</td></tr>'}
         </table>
       </section>
     </div>`;
@@ -462,16 +467,16 @@
       .map(
         (i) => `<tr>
         <td class="text-xs">${NBA.esc(NBA.teamName(i.team_abbr))}</td>
-        <td class="text-xs">${NBA.esc(i.player_name || '—')}${i.is_starter ? ' <span class="text-[10px] text-amber-400">(主力)</span>' : ''}</td>
+        <td class="text-xs">${NBA.esc(i.player_name || '—')}${i.is_starter ? ' <span class="text-xs text-amber-400">(主力)</span>' : ''}</td>
         <td>${NBA.statusBadge(i.status)}</td>
         <td class="text-xs text-slate-400">${NBA.esc(i.reason || '—')}</td>
-        <td class="text-xs text-slate-500">${NBA.tpe(i.report_time_utc)}</td>
+        <td class="text-xs text-slate-400">${NBA.tpe(i.report_time_utc)}</td>
       </tr>`
       )
       .join('');
     return `
     <section id="injury-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-kit-medical mr-1.5 text-slate-500"></i>本場傷病報告</h2>
+      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-kit-medical mr-1.5 text-slate-400"></i>本場傷病報告</h2>
       <div class="overflow-x-auto"><table class="stat-table text-sm">
         <thead><tr><th>球隊</th><th>球員</th><th>狀態</th><th>原因</th><th>申報時間</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -497,7 +502,7 @@
       .join('');
     return `
     <section id="team-stats-section" class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 mb-5">
-      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-chart-simple mr-1.5 text-slate-500"></i>本場球隊數據</h2>
+      <h2 class="text-sm font-semibold text-slate-300 mb-3"><i class="fas fa-chart-simple mr-1.5 text-slate-400"></i>本場球隊數據</h2>
       <div class="overflow-x-auto"><table class="stat-table text-sm">
         <thead><tr><th>項目</th>${head}</tr></thead><tbody>${rows}</tbody>
       </table></div>

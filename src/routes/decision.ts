@@ -130,7 +130,7 @@ r.get('/decision-board', async (c) => {
     games: games.map((g) => displayGame(g, snap, opps, predMap.get(g.id), absences.get(Number(g.id)) ?? 0, true)),
     system_health: health,
     labels: { groups: GROUP_TEXT, taiwan_odds: TAIWAN_ODDS_TEXT },
-    disclaimer: 'Qualified opportunity / Positive EV / Theoretical sizing / Risk-adjusted capacity：不是獲利保證；'
+    disclaimer: '可操作機會、正 EV、理論注碼與風險調整額度都不是獲利保證；'
       + '目前沒有歷史投注績效證據，2026-27 為前瞻驗證期。平台不會自動下注，所有下注由使用者自行在台灣運彩完成後記錄。',
   })
 })

@@ -10,7 +10,8 @@
   const pwLabel = document.getElementById('pw-label');
   let mode = 'login';
 
-  const next = new URLSearchParams(location.search).get('next') || '/';
+  // 只允許站內相對路徑，避免 ?next= 被用來導向外部網站或 javascript:
+  const next = NBA.safeNext(new URLSearchParams(location.search).get('next'));
 
   modeBtns.forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -19,7 +20,7 @@
         const active = b.dataset.mode === mode;
         b.classList.toggle('bg-slate-800', active);
         b.classList.toggle('text-slate-100', active);
-        b.classList.toggle('text-slate-500', !active);
+        b.classList.toggle('text-slate-400', !active);
       });
       nameField.classList.toggle('hidden', mode !== 'register');
       submitBtn.textContent = mode === 'login' ? '登入' : '註冊並登入';

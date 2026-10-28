@@ -48,10 +48,6 @@
 
   // 跨物化穩定的機會鍵（opportunity id 依 snapshot 而變）：用於刷新後保留展開狀態、焦點與草稿對應
   const oppKey = (o) => [o.game_id, o.market, o.side, o.bookmaker, o.display_line ?? ''].join('|');
-  const COMPLIANCE = {
-    compliant: '符合策略', user_override: '超出額度（你已確認）', missing_context: '缺少風險脈絡（額度無法驗證）',
-    outside_model: '模型外（非可操作機會）', manual_unlinked: '手動記錄',
-  };
 
   const MARKET = { ml: '不讓分', spread: '讓分', total: '大小分', h1_ml: '上半場獨贏', h1_spread: '上半場讓分', h1_total: '上半場大小' };
   const GROUP = {
@@ -76,7 +72,7 @@
   };
 
   const esc = (s) => NBA.esc(s);
-  const amt = (v, cur) => (v == null ? '—' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}${cur ? ' ' + esc(cur) : ''}`);
+  const amt = (v, cur) => (v == null ? '—' : NBA.money(Math.round(Number(v)), cur));
   const pct = (v, d = 2) => NBA.pct(v, d);
   const evText = (v) => (v == null ? '—' : NBA.signed(v * 100, 1) + '%');
   const groupBadge = (g, extra) => {
@@ -105,13 +101,13 @@
     const rs = d.risk_state || {};
     if (d.status === 'unavailable') msgs.push(['red', 'fa-database', '決策中心資料表尚未建立（migration 0008 未套用）。下方僅顯示賽程。']);
     else if (!d.materialized && d.games.length) msgs.push(['amber', 'fa-hourglass-half', '決策檢視尚未由 pipeline 產生（排程每分鐘物化）。目前不顯示任何可操作額度。']);
-    if (rs.status === 'recalculation_pending') msgs.push(['amber', 'fa-rotate', '剛記錄的下注 / bankroll 異動尚未納入風險計算（risk recalculation pending）。額度暫不顯示，約一分鐘內更新。']);
+    if (rs.status === 'recalculation_pending') msgs.push(['amber', 'fa-rotate', '剛記錄的下注或資金異動尚未納入風險計算，額度暫不顯示，約一分鐘內更新。']);
     if (rs.materialization_stale) msgs.push(['red', 'fa-triangle-exclamation', `決策物化已超過 10 分鐘未更新（最後確認 ${ago(d.last_confirmed_at)}）— 系統降級，額度暫不視為有效。`]);
-    if (d.bankroll && d.bankroll.configured === false) msgs.push(['slate', 'fa-wallet', '尚未設定 strategy bankroll：只顯示理論比例，不產生可操作金額。<a href="/bankroll" class="underline">前往設定</a>']);
-    if (d.actual_exposure && d.actual_exposure.incomplete) msgs.push(['red', 'fa-circle-exclamation', '實際下注資料不完整：actual exposure may be incomplete，暫停新的可操作額度。']);
-    if (d.actual_exposure && d.actual_exposure.day_over_limit) msgs.push(['red', 'fa-gauge-high', `當日實際 exposure ${pct(d.actual_exposure.day_fraction)} 已超過 risk-v1 上限 ${pct(d.actual_exposure.max_day_fraction, 0)}；剩餘 0%（不修改已下注紀錄）。`]);
+    if (d.bankroll && d.bankroll.configured === false) msgs.push(['slate', 'fa-wallet', '尚未設定策略資金：只顯示理論比例，不產生可操作金額。<a href="/bankroll" class="underline">前往設定</a>']);
+    if (d.actual_exposure && d.actual_exposure.incomplete) msgs.push(['red', 'fa-circle-exclamation', '實際下注資料不完整，已下注比例可能低估，暫停新的可操作額度。']);
+    if (d.actual_exposure && d.actual_exposure.day_over_limit) msgs.push(['red', 'fa-gauge-high', `當日已下注 ${pct(d.actual_exposure.day_fraction)}，已超過 risk-v1 上限 ${pct(d.actual_exposure.max_day_fraction, 0)}；剩餘 0%（不修改已下注紀錄）。`]);
     const health = d.system_health || {};
-    if (health.overall === 'degraded') msgs.push(['amber', 'fa-heart-pulse', '部分資料來源異常（見 System readiness 面板）。']);
+    if (health.overall === 'degraded') msgs.push(['amber', 'fa-heart-pulse', '部分資料來源異常（見「資料來源狀態」面板）。']);
     const cls = { red: 'border-red-900/60 bg-red-950/30 text-red-200', amber: 'border-amber-900/60 bg-amber-950/20 text-amber-200', slate: 'border-slate-700 bg-slate-900/60 text-slate-300' };
     banner.innerHTML = draftNotice(d) + msgs.map(([c, i, m]) => `<div class="rounded-lg border ${cls[c]} px-3 py-2 text-xs mb-2"><i class="fas ${i} mr-1.5"></i>${m}</div>`).join('');
   }
@@ -141,9 +137,9 @@
 
   function tile(label, value, sub, cls = '') {
     return `<div class="rounded-lg bg-slate-900/70 border border-slate-800 px-3 py-2 min-w-0">
-      <div class="text-[10px] text-slate-500 truncate">${label}</div>
+      <div class="text-xs text-slate-400 truncate">${label}</div>
       <div class="text-sm font-semibold num truncate ${cls}">${value}</div>
-      ${sub ? `<div class="text-[10px] text-slate-500 truncate">${sub}</div>` : ''}</div>`;
+      ${sub ? `<div class="text-xs text-slate-400 truncate">${sub}</div>` : ''}</div>`;
   }
 
   function renderSummary(d) {
@@ -153,34 +149,41 @@
     const cur = b.currency || '';
     const rsOk = d.risk_state && d.risk_state.capacity_valid;
     const meter = e.day_fraction != null ? `
-      <div class="exposure-meter" role="img" aria-label="當日實際 exposure ${pct(e.day_fraction)} / 上限 ${pct(e.max_day_fraction, 0)}">
+      <div class="exposure-meter" role="img" aria-label="當日已下注 ${pct(e.day_fraction)} / 上限 ${pct(e.max_day_fraction, 0)}">
         <span style="width:${NBA.pct(e.day_cap_used_share ?? 0, 1)}"></span>
       </div>` : '';
     summaryEl.innerHTML = `
       <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        ${tile('Betting day（台灣）', esc(d.betting_day), d.as_of ? `物化 ${ago(d.last_confirmed_at)}` : '尚未物化')}
-        ${tile('Day-start bankroll', amt(b.day_start_bankroll, cur), b.day_start_basis_as_of ? `凍結於 ${NBA.tpe(b.day_start_basis_as_of)}` : '尚未凍結')}
-        ${tile('目前 / 可用 bankroll', `${amt(b.current_bankroll)} / ${amt(b.available_bankroll)}`, b.committed_open_stake != null ? `未結算 stake ${amt(b.committed_open_stake)}` : '—')}
-        ${tile('當日實際 exposure', e.day_fraction != null ? pct(e.day_fraction) : '—', `risk-v1 上限 ${pct(e.max_day_fraction ?? 0.08, 0)}${meter}`)}
+        ${tile('投注日（台灣）', esc(d.betting_day), d.as_of ? `更新於 ${ago(d.last_confirmed_at)}` : '決策檢視尚未產生')}
+        ${tile('當日起始資金', amt(b.day_start_bankroll, cur), b.day_start_basis_as_of ? `凍結於 ${NBA.tpe(b.day_start_basis_as_of)}` : '尚未凍結')}
+        ${tile(`目前 / 可用資金${cur ? `（${esc(cur)}）` : ''}`, `${amt(b.current_bankroll)} / ${amt(b.available_bankroll)}`, b.committed_open_stake != null ? `未結算下注 ${amt(b.committed_open_stake)}` : '—')}
+        ${tile('當日已下注比例', e.day_fraction != null ? pct(e.day_fraction) : '—', `risk-v1 上限 ${pct(e.max_day_fraction ?? 0.08, 0)}${meter}`)}
         ${tile('剩餘風險額度', e.remaining_day_fraction != null ? pct(e.remaining_day_fraction) : '—', rsOk && e.remaining_day_amount != null ? amt(e.remaining_day_amount, cur) : (d.materialized ? '重新計算中' : '—'), e.remaining_day_fraction === 0 ? 'text-red-400' : '')}
-        ${tile('機會 / 實際下注', `${s.n_actionable ?? 0}+${s.n_review ?? 0} / ${s.n_actual_bets ?? 0}`, `無台彩盤口 ${s.n_games_no_taiwan_odds ?? '—'} 場 · 過舊 ${s.n_games_stale_taiwan_odds ?? 0}`)}
+        ${tile('可操作 / 已記錄', `${s.n_actionable ?? 0}${s.n_review ? ` + 需檢視 ${s.n_review}` : ''} / ${s.n_actual_bets ?? 0} 筆`, `無台彩盤口 ${s.n_games_no_taiwan_odds ?? '—'} 場 · 盤口過舊 ${s.n_games_stale_taiwan_odds ?? 0} 場`)}
       </div>
-      <div class="flex flex-wrap items-center gap-2 mt-2 text-[11px] text-slate-400">
-        <span class="grp-badge grp-review"><i class="fas fa-flask"></i>Prospective validation<span class="opacity-70 font-normal">尚在前瞻驗證</span></span>
+      <div class="flex flex-wrap items-center gap-2 mt-2 text-xs text-slate-400">
+        <span class="grp-badge grp-review"><i class="fas fa-flask" aria-hidden="true"></i>前瞻驗證期</span>
         <span>${esc(d.disclaimer || '')}</span>
       </div>`;
   }
 
   /* ---------------------------- games ---------------------------- */
 
+  // 狀態說明與徽章相同時不重複顯示（例如「無正 EV」）
+  function statusNote(o) {
+    const zh = o.status_text?.zh || NBA.reasonText(o.decision_status);
+    const badge = (GROUP[o.status_group] || [])[3];
+    return zh && zh !== badge ? `<span class="text-xs text-slate-400">${esc(zh)}</span>` : '';
+  }
+
   function oppRow(o, g) {
     const cur = (board.bankroll || {}).currency || '';
     const valid = o.capacity_valid;
     const capacity = o.decision_status === 'qualified'
-      ? (valid ? `<span class="text-orange-300 font-semibold">${amt(o.suggested_stake_amount, cur)}</span><span class="text-slate-500"> · ${pct(o.user_adjusted_fraction)}</span>`
-        : `<span class="text-slate-500">${pct(o.user_adjusted_fraction)}（重新計算中）</span>`)
-      : o.decision_status === 'bankroll_unavailable' && o.user_adjusted_fraction != null ? `<span class="text-slate-500">${pct(o.user_adjusted_fraction)}（無金額）</span>`
-        : '<span class="text-slate-600">0</span>';
+      ? (valid ? `<span class="text-orange-300 font-semibold">${amt(o.suggested_stake_amount, cur)}</span><span class="text-slate-400"> · ${pct(o.user_adjusted_fraction)}</span>`
+        : `<span class="text-slate-400">${pct(o.user_adjusted_fraction)}（重新計算中）</span>`)
+      : o.decision_status === 'bankroll_unavailable' && o.user_adjusted_fraction != null ? `<span class="text-slate-400">${pct(o.user_adjusted_fraction)}（無金額）</span>`
+        : '<span class="text-slate-400">0</span>';
     // 下注是已在台彩發生的事實：每個台彩機會都留記錄入口，合規與否由 /api/bets 依最新物化狀態判斷。
     // 可操作且額度有效的用主按鈕；其餘用次要按鈕，送出時伺服器會在不符合策略時先要求確認。
     const k = esc(oppKey(o));
@@ -196,10 +199,10 @@
           <div class="text-xs text-slate-400">${esc(MARKET[o.market] || o.market)}</div>
           <div class="text-sm font-medium break-words">${sideText(o, g)}</div>
         </div>
-        <div class="text-right"><div class="text-[10px] text-slate-500">賠率</div><div class="num text-sm">${NBA.odds(o.decimal_odds)}</div></div>
-        <div class="text-right"><div class="text-[10px] text-slate-500">EV</div><div class="num text-sm ${(o.ev_per_unit ?? 0) > 0 ? 'text-green-400' : 'text-slate-400'}">${evText(o.ev_per_unit)}</div></div>
-        <div class="text-right min-w-0"><div class="text-[10px] text-slate-500">新增額度</div><div class="num text-sm leading-tight">${capacity}</div></div>
-        <div class="opp-status">${groupBadge(o.status_group, o.status_text?.zh)}<span class="text-[10px] text-slate-500">${esc(o.status_text?.zh || o.decision_status)}</span>${recordBtn}</div>
+        <div class="text-right"><div class="text-xs text-slate-400">賠率</div><div class="num text-sm">${NBA.odds(o.decimal_odds)}</div></div>
+        <div class="text-right"><div class="text-xs text-slate-400">EV</div><div class="num text-sm ${(o.ev_per_unit ?? 0) > 0 ? 'text-green-400' : 'text-slate-400'}">${evText(o.ev_per_unit)}</div></div>
+        <div class="text-right min-w-0"><div class="text-xs text-slate-400">新增額度</div><div class="num text-sm leading-tight">${capacity}</div></div>
+        <div class="opp-status">${groupBadge(o.status_group, o.status_text?.zh)}${statusNote(o)}${recordBtn}</div>
       </div>
       <details class="opp-details" data-k="${k}">
         <summary data-fk="sum|${k}">詳細（機率 / Kelly / exposure / 來源）</summary>
@@ -219,14 +222,14 @@
           ${o.linked_bet_ids?.length ? `<div><dt>已記錄注單</dt><dd>#${o.linked_bet_ids.join(', #')}${o.linked_actual_fraction != null ? `（${pct(o.linked_actual_fraction)}）` : ''}</dd></div>` : ''}
           ${o.paper_decision_id ? `<div><dt>Paper decision（T-60）</dt><dd>#${o.paper_decision_id}（前瞻驗證紀錄，非實際下注）</dd></div>` : ''}
         </dl>
-        ${(o.reasons || []).length ? `<p class="text-[10px] text-slate-500 mt-1">原因：${o.reasons.map(esc).join('、')}</p>` : ''}
-        ${warn.length ? `<p class="text-[10px] text-amber-400/90 mt-1"><i class="fas fa-triangle-exclamation mr-1"></i>${warn.map(esc).join('、')}</p>` : ''}
+        ${(o.reasons || []).length ? `<p class="text-xs text-slate-400 mt-1">原因：${o.reasons.map((r) => esc(NBA.reasonText(r))).join('、')}</p>` : ''}
+        ${warn.length ? `<p class="text-xs text-amber-300 mt-1"><i class="fas fa-triangle-exclamation mr-1" aria-hidden="true"></i>${warn.map((w) => esc(NBA.reasonText(w))).join('、')}</p>` : ''}
       </details>
     </div>`;
   }
 
-  function intlRow(o) {
-    return `<tr><td>${esc(o.bookmaker)}</td><td>${esc(MARKET[o.market] || o.market)} ${esc(o.side)}${o.display_line != null ? ' ' + NBA.fixed(o.display_line) : ''}</td>
+  function intlRow(o, g) {
+    return `<tr><td>${esc(o.bookmaker)}</td><td>${esc(MARKET[o.market] || o.market)} ${sideText(o, g)}</td>
       <td class="num">${NBA.odds(o.decimal_odds)}</td><td class="num">${evText(o.ev_per_unit)}</td></tr>`;
   }
 
@@ -234,9 +237,9 @@
     const txt = (board.labels?.taiwan_odds || {})[g.taiwan_odds_state] || '台彩盤口尚未取得';
     const icon = TW_ICON[g.taiwan_odds_state] || 'fa-circle-question';
     const hint = g.taiwan_odds_state === 'ingestion_unavailable'
-      ? '<div class="text-[11px] text-slate-500 mt-1">合規備援：一般瀏覽器匯出 HAR → <code>python run_odds.py --source twsport --from-file capture.har</code></div>' : '';
-    return `<div class="tw-missing"><i class="fas ${icon} mr-1.5"></i>${esc(txt)}${g.taiwan_odds_reason ? `<span class="text-slate-500">（${esc(g.taiwan_odds_reason)}）</span>` : ''}${hint}
-      <div class="text-[11px] text-slate-500 mt-1">台彩 actionable 狀態維持 unavailable；不會以國際盤替代。</div></div>`;
+      ? '<div class="text-xs text-slate-400 mt-1">需手動匯入台彩盤口（步驟見<a href="/status" class="underline underline-offset-2">系統狀態</a>）。</div>' : '';
+    return `<div class="tw-missing"><i class="fas ${icon} mr-1.5"></i>${esc(txt)}${g.taiwan_odds_reason ? `<span class="text-slate-400">（${esc(g.taiwan_odds_reason)}）</span>` : ''}${hint}
+      <div class="text-xs text-slate-400 mt-1">沒有台彩盤口就沒有可操作機會；不會以國際盤替代。</div></div>`;
   }
 
   function gameCard(g) {
@@ -245,9 +248,9 @@
     const groups = g.status_group || (board.materialized ? 'blocked' : null);
     const predLine = p
       ? `分差 ${NBA.signed(p.pred_margin)} · 總分 ${NBA.fixed(p.pred_total)} · 上半場 ${NBA.signed(p.h1_margin)} / ${NBA.fixed(p.h1_total)}
-         <span class="text-slate-600">· ${esc(p.model_version)} ${esc(p.prediction_kind || '')} · ${ago(p.available_at)}</span>`
-      : pd ? `<span class="text-slate-500">尚無可定價預測（ml-v2.0）· 最新紀錄：${esc(pd.model_version)} 分差 ${NBA.signed(pd.pred_margin)}（僅顯示）</span>`
-        : '<span class="text-slate-500"><i class="fas fa-hourglass-half mr-1"></i>預測尚未產生</span>';
+         <span class="text-slate-400">· ${esc(p.model_version)} ${esc(p.prediction_kind || '')} · ${ago(p.available_at)}</span>`
+      : pd ? `<span class="text-slate-400">尚無可定價預測（ml-v2.0）· 最新紀錄：${esc(pd.model_version)} 分差 ${NBA.signed(pd.pred_margin)}（僅顯示）</span>`
+        : '<span class="text-slate-400"><i class="fas fa-hourglass-half mr-1"></i>預測尚未產生</span>';
     const dq = (p?.data_quality_flags || []);
     const warns = [];
     if (g.key_absences) warns.push(`<span class="text-red-300"><i class="fas fa-user-injured mr-1"></i>主力缺陣 ${g.key_absences}</span>`);
@@ -260,35 +263,35 @@
     <article class="game-card" data-game="${g.game_id}">
       <header class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <div class="flex items-center gap-2 text-[11px] text-slate-500 mb-0.5">
+          <div class="flex items-center gap-2 text-xs text-slate-400 mb-0.5">
             <span>${esc(g.tipoff_display)}</span>${NBA.gameStatusBadge(g.game_status)}
           </div>
-          <a href="/games/${g.game_id}" class="text-[15px] font-semibold hover:text-orange-300 truncate block">
-            ${NBA.matchup(g.away, g.home)}</a>
+          <h2 class="text-[15px] font-semibold truncate"><a href="/games/${g.game_id}" class="hover:text-orange-300">
+            ${NBA.matchup(g.away, g.home)}</a></h2>
         </div>
         <div class="shrink-0 text-right">${groups ? groupBadge(groups) : ''}</div>
       </header>
-      <div class="text-[11px] text-slate-300 mt-1.5">${predLine}</div>
-      ${warns.length ? `<div class="flex flex-wrap gap-x-3 gap-y-1 text-[11px] mt-1">${warns.join('')}</div>` : ''}
-      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 mt-2">
+      <div class="text-xs text-slate-300 mt-1.5">${predLine}</div>
+      ${warns.length ? `<div class="flex flex-wrap gap-x-3 gap-y-1 text-xs mt-1">${warns.join('')}</div>` : ''}
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400 mt-2">
         <span>同場實際 ${g.actual_game_fraction != null ? pct(g.actual_game_fraction) : '—'}</span>
         <span>同場剩餘 ${g.remaining_game_fraction != null ? pct(g.remaining_game_fraction) : '—'}${board.risk_state?.capacity_valid && g.remaining_game_amount != null ? `（${amt(g.remaining_game_amount)}）` : ''}</span>
         ${recorded ? `<span class="text-sky-300"><i class="fas fa-receipt mr-1"></i>已記錄 ${recorded} 筆實際下注</span>` : ''}
-        ${pdec ? `<span>Paper（T-60）：${esc(pdec.decision_status)}${pdec.no_bet_reason ? ' · ' + esc(pdec.no_bet_reason) : ''}</span>` : ''}
+        ${pdec ? `<span>前瞻驗證（開賽前 60 分）：${esc(NBA.reasonText(pdec.decision_status))}${pdec.no_bet_reason ? ' · ' + esc(NBA.reasonText(pdec.no_bet_reason)) : ''}</span>` : ''}
       </div>
       <section class="mt-3">
-        <h3 class="text-[11px] font-semibold text-slate-400 mb-1.5"><i class="fas fa-flag mr-1"></i>台灣運彩</h3>
+        <h3 class="text-xs font-semibold text-slate-400 mb-1.5"><i class="fas fa-flag mr-1"></i>台灣運彩</h3>
         ${tw.length ? tw.map((o) => oppRow(o, g)).join('') : twMissing(g)}
         ${tw.length && g.taiwan_odds_state && g.taiwan_odds_state !== 'available' ? twMissing(g) : ''}
       </section>
       ${intl.length ? `
       <details class="mt-2 intl" data-k="intl|${g.game_id}">
-        <summary class="text-[11px] text-slate-400" data-fk="sum|intl|${g.game_id}"><i class="fas fa-globe mr-1"></i>International comparison（${intl.length}）— International diagnostic · Not Taiwan Sports Lottery evidence</summary>
-        <div class="overflow-x-auto"><table class="stat-table text-xs mt-1"><thead><tr><th>Bookmaker</th><th>Outcome</th><th>賠率</th><th>EV（診斷）</th></tr></thead>
-        <tbody>${intl.map(intlRow).join('')}</tbody></table></div>
+        <summary class="text-xs text-slate-400" data-fk="sum|intl|${g.game_id}"><i class="fas fa-globe mr-1" aria-hidden="true"></i>國際盤對照（${intl.length}）— 僅供診斷，不是台彩證據</summary>
+        <div class="overflow-x-auto"><table class="stat-table text-xs mt-1"><thead><tr><th scope="col">莊家</th><th scope="col">選項</th><th scope="col">賠率</th><th scope="col">EV（診斷）</th></tr></thead>
+        <tbody>${intl.map((o) => intlRow(o, g)).join('')}</tbody></table></div>
       </details>` : ''}
       ${(g.blockers || []).length && !tw.some((o) => o.status_group === 'actionable' || o.status_group === 'review')
-        ? `<p class="text-[10px] text-slate-500 mt-2">為什麼沒有可操作機會：${g.blockers.map(esc).join('、')}</p>` : ''}
+        ? `<p class="text-xs text-slate-400 mt-2">為什麼沒有可操作機會：${g.blockers.map((b) => esc(NBA.reasonText(b))).join('、')}</p>` : ''}
     </article>`;
   }
 
@@ -358,14 +361,14 @@
     const bs = pp.bootstrap || {};
     evidenceEl.innerHTML = `
     <section class="panel">
-      <h2><i class="fas fa-scale-balanced mr-1.5"></i>Evidence</h2>
+      <h2><i class="fas fa-scale-balanced mr-1.5" aria-hidden="true"></i>證據狀態</h2>
       <dl class="kv">
-        <div><dt>Historical model evidence</dt><dd class="text-green-400">Available</dd></div>
-        <div><dt>Historical betting evidence</dt><dd class="text-amber-400">Unavailable</dd></div>
-        <div><dt>Prospective paper</dt><dd>${pp.status === 'unavailable' ? 'ledger 未啟用' : `${pp.n_betting_days ?? 0} betting days · ${pp.n_graded_betting_days ?? 0} graded · ${pp.n_bets ?? 0} bets`}</dd></div>
-        <div><dt>Bootstrap（≥ ${pp.min_days_for_ci ?? 30} graded days）</dt><dd>${bs.status === 'ok' ? `95% CI ${NBA.signed(bs.yield_ci95[0] * 100, 1)}% ~ ${NBA.signed(bs.yield_ci95[1] * 100, 1)}%（描述用）` : 'Insufficient sample'}</dd></div>
+        <div><dt>歷史模型評估</dt><dd>有</dd></div>
+        <div><dt>歷史投注證據（台彩盤口）</dt><dd class="text-amber-300">無</dd></div>
+        <div><dt>前瞻驗證</dt><dd>${pp.status === 'unavailable' ? '尚未啟用' : `${pp.n_betting_days ?? 0} 個投注日 · 已結算 ${pp.n_graded_betting_days ?? 0} 日 · ${pp.n_bets ?? 0} 注`}</dd></div>
+        <div><dt>信賴區間（需 ≥ ${pp.min_days_for_ci ?? 30} 個已結算日）</dt><dd>${bs.status === 'ok' ? `95% CI ${NBA.signed(bs.yield_ci95[0] * 100, 1)}% ~ ${NBA.signed(bs.yield_ci95[1] * 100, 1)}%（僅描述）` : '樣本不足'}</dd></div>
       </dl>
-      <p class="text-[10px] text-slate-500 mt-2">Prospective 結果只作描述，不會改變策略或額度；使用者實際下注紀錄另見「資金」頁（不是策略績效）。</p>
+      <p class="text-xs text-slate-400 mt-2">前瞻驗證結果只作描述，不會改變策略或額度；你的實際下注紀錄另見「資金」頁（不是策略績效）。</p>
     </section>`;
   }
 
@@ -374,17 +377,17 @@
     if (!h) { healthEl.innerHTML = ''; return; }
     healthEl.innerHTML = `
     <section class="panel">
-      <h2><i class="fas fa-heart-pulse mr-1.5"></i>System readiness <span class="text-[10px] font-normal text-slate-500">${esc(h.overall)}</span></h2>
+      <h2><i class="fas fa-heart-pulse mr-1.5" aria-hidden="true"></i>資料來源狀態 <span class="text-xs font-normal text-slate-400">${esc(({ healthy: '正常', degraded: '部分異常', blocked: '受阻' })[h.overall] || h.overall)}</span></h2>
       <ul class="space-y-1">
         ${h.components.map((c) => {
           const [icon, cls, zh] = HEALTH[c.status] || HEALTH.waiting;
-          return `<li class="flex items-start justify-between gap-2 text-[11px]">
-            <span class="text-slate-300 min-w-0">${esc(c.label)}${c.detail ? `<span class="block text-[10px] text-slate-500 truncate" title="${esc(c.detail)}">${esc(c.detail)}</span>` : ''}</span>
-            <span class="shrink-0 text-right ${cls}"><i class="fas ${icon} mr-1"></i>${zh}<span class="block text-[10px] text-slate-500">${c.last_successful_update ? ago(c.last_successful_update) : ''}</span></span>
+          return `<li class="flex items-start justify-between gap-2 text-xs">
+            <span class="text-slate-300 min-w-0">${esc(c.label)}${c.detail ? `<span class="block text-xs text-slate-400 truncate" title="${esc(c.detail)}">${esc(c.detail)}</span>` : ''}</span>
+            <span class="shrink-0 text-right ${cls}"><i class="fas ${icon} mr-1"></i>${zh}<span class="block text-xs text-slate-400">${c.last_successful_update ? ago(c.last_successful_update) : ''}</span></span>
           </li>`;
         }).join('')}
       </ul>
-      <a href="/status" class="text-[10px] text-orange-400 hover:underline">完整系統狀態 →</a>
+      <a href="/status" class="text-xs text-orange-400 hover:underline">完整系統狀態 →</a>
     </section>`;
   }
 
@@ -432,7 +435,7 @@
     <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rec-title">
       <form id="rec-form" class="modal-card">
         <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-pen-to-square text-orange-400 mr-1.5" aria-hidden="true"></i>記錄下注</h2>
-        <p class="text-[11px] text-slate-400 mb-3">請先在台灣運彩完成下注，再填入<strong>實際成交</strong>的賠率與金額。平台不會替你下注。</p>
+        <p class="text-xs text-slate-400 mb-3">請先在台灣運彩完成下注，再填入<strong>實際成交</strong>的賠率與金額。平台不會替你下注。</p>
         ${context}
         <dl class="kv mb-3">
           <div><dt>比賽</dt><dd>${NBA.matchup(g.away, g.home)} · ${esc(g.tipoff_display)}</dd></div>
@@ -443,18 +446,18 @@
           <div><dt>EV（平台觀察賠率）</dt><dd class="num">${evText(o.ev_per_unit)} · 尚在前瞻驗證</dd></div>
         </dl>
         <div class="grid grid-cols-2 gap-3">
-          <label class="block"><span class="text-[11px] text-slate-400">實際賠率</span>
+          <label class="block"><span class="text-xs text-slate-400">實際賠率</span>
             <input name="odds" type="number" inputmode="decimal" step="0.01" min="1.01" required value="${draft?.odds ?? o.decimal_odds ?? ''}" class="inp num" /></label>
-          <label class="block"><span class="text-[11px] text-slate-400">實際金額（${esc(cur || '—')}）</span>
+          <label class="block"><span class="text-xs text-slate-400">實際金額（${esc(cur || '—')}）</span>
             <input name="stake" type="number" inputmode="numeric" step="1" min="1" required value="${esc(draft?.stake ?? '')}" class="inp num" /></label>
           ${fill ? `<div class="col-span-2 -mt-1">${fill}</div>` : ''}
-          <label class="block col-span-2"><span class="text-[11px] text-slate-400">下注時間（留空＝現在；晚點才記錄請改成實際下注時間）</span>
+          <label class="block col-span-2"><span class="text-xs text-slate-400">下注時間（留空＝現在；晚點才記錄請改成實際下注時間）</span>
             <input name="placed_at" type="datetime-local" max="${localNow()}" value="${esc(draft?.placed_at ?? '')}" class="inp" /></label>
-          <label class="block col-span-2"><span class="text-[11px] text-slate-400">備註（選填）</span>
+          <label class="block col-span-2"><span class="text-xs text-slate-400">備註（選填）</span>
             <input name="note" type="text" maxlength="200" value="${esc(draft?.note ?? '')}" class="inp" /></label>
         </div>
-        <p id="rec-odds-note" class="text-[11px] text-slate-400 mt-2 hidden">實際賠率與平台觀察不同：兩者都會保存（參考盤口快照不會被覆寫）。</p>
-        <div id="rec-confirm" class="hidden mt-3 rounded border border-amber-800/60 bg-amber-950/30 p-2 text-[11px] text-amber-200"></div>
+        <p id="rec-odds-note" class="text-xs text-slate-400 mt-2 hidden">實際賠率與平台觀察不同：兩者都會保存（參考盤口快照不會被覆寫）。</p>
+        <div id="rec-confirm" class="hidden mt-3 rounded border border-amber-800/60 bg-amber-950/30 p-2 text-xs text-amber-200"></div>
         <div class="modal-actions">
           <span id="rec-msg" class="text-xs mr-auto" role="status"></span>
           <button type="button" id="rec-cancel" class="rec-secondary">取消</button>
@@ -517,13 +520,12 @@
           needConfirm = e.data;
           const box = $('rec-confirm');
           box.classList.remove('hidden');
-          box.innerHTML = `<p class="font-semibold mb-1"><i class="fas fa-triangle-exclamation mr-1"></i>${esc(e.data.message)}</p>
-            <ul class="list-disc ml-4 mb-1">${(e.data.checks || []).map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
-            <p class="mb-1">確認後記錄為 <code>${esc(e.data.compliance_if_confirmed)}</code>，不會自動縮小你的金額，也不視為策略合規下注。</p>
-            <label class="flex items-center gap-1.5"><input id="rec-ack" type="checkbox" />我確認這是已在外部完成的實際下注</label>
-            ${e.data.requires_reason ? '<input id="rec-reason" type="text" maxlength="300" placeholder="原因（必填）" class="inp mt-1" />' : ''}`;
+          box.innerHTML = `${NBA.confirmationHtml(e.data, { stake: payload.stake, currency: cur })}
+            <label class="flex items-center gap-2 mt-2"><input id="rec-ack" type="checkbox" class="check" />我確認這是已在外部完成的實際下注</label>
+            ${e.data.requires_reason ? '<label class="block mt-2"><span class="text-xs text-amber-200">原因（必填）</span><input id="rec-reason" type="text" maxlength="300" class="inp" /></label>' : ''}`;
           msg.className = 'text-xs text-amber-300 mr-auto';
-          msg.textContent = '需要明確確認';
+          msg.textContent = '需要確認後再送出一次';
+          $('rec-ack').focus();
         } else if (e.status === 409) {
           msg.className = 'text-xs text-red-400 mr-auto';
           msg.textContent = e.data?.message || e.message;
@@ -541,13 +543,13 @@
       form.outerHTML = `
       <div class="modal-card" role="document">
         <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-circle-check text-green-400 mr-1.5" aria-hidden="true"></i>${res.replay ? `這筆先前已記錄（#${res.id}），未重複建立` : `已記錄 #${res.id}`}</h2>
-        <p class="text-[11px] text-slate-400 mb-3" role="status">風險額度重新計算中，約一分鐘內更新；更新前決策板不顯示可用額度。</p>
+        <p class="text-xs text-slate-400 mb-3" role="status">風險額度重新計算中，約一分鐘內更新；更新前決策板不顯示可用額度。</p>
         <dl class="kv mb-1">
           <div><dt>比賽</dt><dd>${NBA.matchup(g.away, g.home)}</dd></div>
           <div><dt>玩法 / 方向</dt><dd>${esc(MARKET[o.market] || o.market)} · ${sideText(o, g)}</dd></div>
           <div><dt>實際賠率</dt><dd class="num">${NBA.odds(bet.odds ?? payload.odds)}</dd></div>
           <div><dt>實際金額</dt><dd class="num">${amt(bet.stake ?? payload.stake, cur)}</dd></div>
-          <div><dt>策略判定</dt><dd>${esc(COMPLIANCE[compliance] || compliance || '—')}</dd></div>
+          <div><dt>策略判定</dt><dd>${esc(NBA.COMPLIANCE_TEXT[compliance] || compliance || '—')}</dd></div>
         </dl>
         <div class="modal-actions">
           <a href="/bets" class="rec-secondary">查看投注紀錄</a>
@@ -565,6 +567,13 @@
 
   function syncDate(date) {
     if (picker) picker.value = date;
+    // 標題跟著日期走：切到明日時不再寫「今日」
+    const title = $('decision-title');
+    if (title) {
+      const name = date === NBA.tpeDateStr(0) ? '今日決策中心' : date === NBA.tpeDateStr(1) ? '明日決策中心' : `決策中心 · ${date.slice(5).replace('-', '/')}`;
+      title.textContent = name;
+      document.title = `${name} — NBA 預測平台`;
+    }
     tabs.forEach((t) => {
       const on = NBA.tpeDateStr(Number(t.dataset.dday)) === date;
       t.classList.toggle('bg-orange-500/15', on);
@@ -631,7 +640,7 @@
       renderDock(null);
       if (e.status === 401) {
         gamesEl.innerHTML = `<div class="rounded-lg border border-slate-700 bg-slate-900/60 p-6 text-center">
-          <i class="fas fa-lock text-2xl text-slate-600 mb-2"></i>
+          <i class="fas fa-lock text-2xl text-slate-400 mb-2"></i>
           <p class="text-sm text-slate-400 mb-3">決策中心包含個人 bankroll 與實際下注，請先登入</p>
           <a href="/login?next=${encodeURIComponent(location.pathname + location.search)}" class="inline-block px-3 py-1.5 rounded bg-orange-500 text-white text-sm">前往登入</a></div>`;
       } else {

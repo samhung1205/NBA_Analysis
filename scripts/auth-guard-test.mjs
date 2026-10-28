@@ -158,5 +158,20 @@ await t('session token signature / expiry behavior is unchanged', async () => {
   const [body, sig] = tok.split('.')
   assert.equal(await readSessionToken(GOOD, body + '.' + sig.slice(0, -2) + 'AA'), null)
 })
+await t('login ?next= only allows same-site relative paths (no open redirect)', async () => {
+  // 載入瀏覽器端 common.js（純函式，不需要 DOM）
+  const { readFile } = await import('node:fs/promises')
+  const vm = await import('node:vm')
+  const src = await readFile(new URL('../public/static/js/common.js', import.meta.url), 'utf8')
+  const ctx = { URL, document: { addEventListener() {} }, window: {} }
+  vm.runInNewContext(src, ctx)
+  const safe = (v) => ctx.window.NBA.safeNext(v, 'https://nba.example.test')
+  assert.equal(safe('/decision?date=2026-10-29'), '/decision?date=2026-10-29')
+  assert.equal(safe('/bets#x'), '/bets#x')
+  for (const bad of [null, '', 'decision', '//evil.example', '/\\evil.example', '\\\\evil.example', 'https://evil.example/x',
+    'javascript:alert(1)', ' /decision', '/\t/evil.example', '/%0d%0a', 'HTTPS://nba.example.test/decision']) {
+    assert.equal(safe(bad), bad === '/%0d%0a' ? '/%0d%0a' : '/', String(bad))
+  }
+})
 
 console.log(`\n${n} passed`)

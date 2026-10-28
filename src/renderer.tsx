@@ -33,6 +33,7 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
         <link href="/static/style.css" rel="stylesheet" />
       </head>
       <body class="bg-slate-950 text-slate-100 min-h-screen antialiased">
+        <a href="#main-content" class="skip-link">跳到主要內容</a>
         {/* 手機上導覽移到底部分頁列，頂部只剩品牌與帳號，不必常駐 */}
         <header id="site-header" class="border-b border-slate-800 bg-slate-900/80 backdrop-blur md:sticky md:top-0 z-40">
           <div class="max-w-7xl mx-auto px-4">
@@ -64,11 +65,11 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
           </div>
         </header>
 
-        <main id="main-content" class="max-w-7xl mx-auto px-4 py-6">
+        <main id="main-content" tabindex="-1" class="max-w-7xl mx-auto px-4 py-6">
           {children}
         </main>
 
-        <footer id="site-footer" class="border-t border-slate-800 mt-12 py-6 text-xs text-slate-500">
+        <footer id="site-footer" class="border-t border-slate-800 mt-12 py-6 text-xs text-slate-400">
           <div class="max-w-7xl mx-auto px-4 space-y-2">
             <p class="text-amber-500/90">
               <i class="fas fa-triangle-exclamation mr-1"></i>
@@ -77,10 +78,10 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
               不對外提供投注服務、不代操、不收費。
             </p>
             <p>
-              台彩返還率低於國際盤，長期獲利門檻高；所有推薦與回測 ROI 均以台彩實際賠率計算。
+              台彩返還率低於國際盤，長期獲利門檻高；實際投注損益以台彩實際賠率計算，沒有歷史台彩盤口時不提供回測 ROI 證據。
               未滿 18 歲不得投注。
             </p>
-            <p class="text-slate-600">
+            <p class="text-slate-400">
               階段一（網站殼子）· Hono + Cloudflare Pages ·
               資料由階段二（Python 資料工程 + ML 引擎）寫入共用資料庫
             </p>

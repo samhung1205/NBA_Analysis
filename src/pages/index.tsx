@@ -27,19 +27,20 @@ pages.get('/', (c) => {
             <h1 class="text-lg font-bold mb-1">
               <i class="fas fa-basketball text-orange-400 mr-1.5"></i>賽事總覽
             </h1>
-            <p class="text-xs text-slate-500">
+            <p class="text-xs text-slate-400">
               台灣時間 <span id="date-label" class="text-slate-300 num"></span>
               　·　模型預測 vs 台彩盤口 vs 國際盤，並標示 Edge
             </p>
           </div>
           <div class="flex items-center gap-2">
-            <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs">
-              <button data-day-tab="0" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">今日</button>
-              <button data-day-tab="1" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">明日</button>
-              <button data-day-tab="2" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">後天</button>
+            <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs" role="group" aria-label="日期">
+              <button type="button" data-day-tab="0" aria-pressed="false" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">今日</button>
+              <button type="button" data-day-tab="1" aria-pressed="true" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">明日</button>
+              <button type="button" data-day-tab="2" aria-pressed="false" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">後天</button>
             </div>
             <input
               type="date"
+              aria-label="選擇日期"
               id="date-picker"
               class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs"
             />
@@ -61,10 +62,10 @@ pages.get('/decision', (c) => {
       <div class="flex items-start justify-between gap-3 flex-wrap mb-3">
         <div>
           <h1 class="text-lg font-bold mb-1">
-            <i class="fas fa-compass text-orange-400 mr-1.5"></i>今日決策中心
+            <i class="fas fa-compass text-orange-400 mr-1.5" aria-hidden="true"></i><span id="decision-title">今日決策中心</span>
           </h1>
-          <p class="text-xs text-slate-500">
-            台彩盤口 × 模型 × risk-v1（含已實際下注 exposure）· 平台不會自動下注；在台彩下注後回來按「記錄下注」
+          <p class="text-xs text-slate-400">
+            台彩盤口 × 模型 × risk-v1（已扣除你實際下注的額度）· 平台不會自動下注；在台彩下注後回來按「記錄下注」
           </p>
         </div>
         <div class="flex items-center gap-2">
@@ -100,10 +101,10 @@ pages.get('/bankroll', (c) => {
   return c.render(
     <section id="bankroll-page">
       <h1 class="text-lg font-bold mb-1">
-        <i class="fas fa-wallet text-orange-400 mr-1.5"></i>Strategy bankroll
+        <i class="fas fa-wallet text-orange-400 mr-1.5" aria-hidden="true"></i>策略資金
       </h1>
-      <p class="text-xs text-slate-500 mb-4">
-        手動維護的策略資金（不連銀行 / bookmaker）。所有異動皆為 append-only 紀錄；金額合計、未結算 stake、day-start 皆由 Python 計算。
+      <p class="text-xs text-slate-400 mb-4">
+        手動維護的策略資金（不連結銀行或台彩帳戶）。每筆異動只能新增、不能修改或刪除；金額合計、未結算下注、當日起始資金都由 Python 計算。
       </p>
       <div id="bankroll-summary" class="mb-5"></div>
       <div class="grid gap-5 lg:grid-cols-2">
@@ -129,7 +130,7 @@ pages.get('/games/:id', async (c) => {
   if (!game) {
     return c.render(
       <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center">
-        <i class="fas fa-circle-question text-3xl text-slate-600 mb-3"></i>
+        <i class="fas fa-circle-question text-3xl text-slate-400 mb-3"></i>
         <p class="text-sm text-slate-400 mb-4">找不到編號 {id} 的比賽</p>
         <a href="/" class="text-orange-400 text-sm hover:underline">返回賽事總覽</a>
       </div>,
@@ -161,16 +162,16 @@ pages.get('/injuries', (c) => {
           <h1 class="text-lg font-bold mb-1">
             <i class="fas fa-kit-medical text-orange-400 mr-1.5"></i>傷病中心
           </h1>
-          <p class="text-xs text-slate-500">
+          <p class="text-xs text-slate-400">
             各隊官方傷病申報與主力缺陣警示（NBA 官方於賽前一日當地 17:00 前申報，賽前會多次更新）
           </p>
         </div>
         <div class="flex items-center gap-2">
-          <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs">
-            <button data-inj-tab="0" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">今日</button>
-            <button data-inj-tab="1" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">明日</button>
+          <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs" role="group" aria-label="日期">
+            <button type="button" data-inj-tab="0" aria-pressed="true" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">今日</button>
+            <button type="button" data-inj-tab="1" aria-pressed="false" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">明日</button>
           </div>
-          <input type="date" id="inj-date" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" />
+          <input type="date" aria-label="選擇日期" id="inj-date" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" />
         </div>
       </div>
       <div id="injuries-summary" class="mb-4"></div>
@@ -190,18 +191,18 @@ pages.get('/performance', (c) => {
         <h1 class="text-lg font-bold mb-1">
           <i class="fas fa-chart-line text-orange-400 mr-1.5"></i>回測 / 績效
         </h1>
-        <p class="text-xs text-slate-500 mb-5">
-          模型歷史準確率、ATS、模擬 ROI 與個人實際投注損益曲線。
-          <span class="text-amber-500/90">所有 ROI 皆以台彩實際賠率計算。</span>
+        <p class="text-xs text-slate-400 mb-5">
+          模型歷史準確率、ATS 與你的實際投注損益。
+          <span class="text-amber-300/90">實際投注損益以你記錄的台彩實際賠率計算；模型回測沒有歷史台彩盤口時，ROI 顯示「無證據」（不是 0，也不是獲利證明）。</span>
         </p>
 
         <h2 class="text-sm font-semibold text-slate-300 mb-3">
-          <i class="fas fa-robot mr-1.5 text-slate-500"></i>模型回測績效
+          <i class="fas fa-robot mr-1.5 text-slate-400"></i>模型回測績效
         </h2>
         <div id="metrics-root" class="mb-8"></div>
 
         <h2 class="text-sm font-semibold text-slate-300 mb-3">
-          <i class="fas fa-wallet mr-1.5 text-slate-500"></i>個人實際投注損益
+          <i class="fas fa-wallet mr-1.5 text-slate-400"></i>個人實際投注損益
         </h2>
         <div id="pnl-root" class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"></div>
       </section>
@@ -218,7 +219,7 @@ pages.get('/bets', (c) => {
       <h1 class="text-lg font-bold mb-1">
         <i class="fas fa-receipt text-orange-400 mr-1.5"></i>個人投注紀錄
       </h1>
-      <p class="text-xs text-slate-500 mb-5">
+      <p class="text-xs text-slate-400 mb-5">
         僅供個人於台灣運彩投注之紀錄追蹤；賠率請填<strong class="text-slate-300">台彩實際賠率</strong>，
         以確保績效與 ROI 計算真實。
       </p>
@@ -237,7 +238,7 @@ pages.get('/status', (c) => {
       <h1 class="text-lg font-bold mb-1">
         <i class="fas fa-heart-pulse text-orange-400 mr-1.5"></i>系統狀態
       </h1>
-      <p class="text-xs text-slate-500 mb-3">
+      <p class="text-xs text-slate-400 mb-3">
         各資料來源最後更新時間與失敗告警（由階段二排程器寫入 <code>data_sources</code> 表）
       </p>
       <div id="status-overall" class="rounded-lg border border-slate-800 bg-slate-900/60 p-3 mb-5"></div>
@@ -256,16 +257,16 @@ pages.get('/login', (c) => {
         <h1 class="text-base font-bold mb-1">
           <i class="fas fa-user-lock text-orange-400 mr-1.5"></i>個人帳號
         </h1>
-        <p class="text-xs text-slate-500 mb-4">登入以存取投注紀錄與個人績效等私人資料</p>
+        <p class="text-xs text-slate-400 mb-4">登入以存取投注紀錄與個人績效等私人資料</p>
 
         <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs mb-4">
           <button data-mode="login" class="flex-1 px-3 py-1.5 bg-slate-800 text-slate-100">登入</button>
-          <button data-mode="register" class="flex-1 px-3 py-1.5 text-slate-500 hover:bg-slate-800/50">註冊</button>
+          <button data-mode="register" class="flex-1 px-3 py-1.5 text-slate-400 hover:bg-slate-800/50">註冊</button>
         </div>
 
         <form id="auth-form" class="space-y-3">
           <label class="block">
-            <span class="text-[11px] text-slate-500">Email</span>
+            <span class="text-xs text-slate-400">Email</span>
             <input
               name="email"
               type="email"
@@ -275,7 +276,7 @@ pages.get('/login', (c) => {
             />
           </label>
           <label class="block">
-            <span id="pw-label" class="text-[11px] text-slate-500">密碼</span>
+            <span id="pw-label" class="text-xs text-slate-400">密碼</span>
             <input
               name="password"
               type="password"
@@ -285,7 +286,7 @@ pages.get('/login', (c) => {
             />
           </label>
           <label id="name-field" class="block hidden">
-            <span class="text-[11px] text-slate-500">顯示名稱（選填）</span>
+            <span class="text-xs text-slate-400">顯示名稱（選填）</span>
             <input
               name="display_name"
               type="text"

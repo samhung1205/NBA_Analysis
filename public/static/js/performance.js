@@ -10,22 +10,20 @@
 
   function metricCard(m) {
     const cell = (label, value, cls = '') =>
-      `<div><div class="text-[10px] text-slate-500">${label}</div><div class="text-sm font-semibold num ${cls}">${value}</div></div>`;
-    // 規格書 Phase B 驗收：Elo accuracy ≥ 63%
-    const accCls = m.accuracy >= 0.63 ? 'text-green-400' : m.accuracy >= 0.6 ? 'text-lime-400' : 'text-amber-400';
-    const roiCls = (m.sim_roi ?? 0) > 0 ? 'text-green-400' : 'text-red-400';
+      `<div><div class="text-xs text-slate-400">${label}</div><div class="text-sm font-semibold num ${cls}">${value}</div></div>`;
+    // 審慎低飽和：不以顏色暗示「好」；模擬 ROI 沒有歷史台彩盤口證據時顯示「無證據」，不是 0 也不是獲利證明
     return `
     <article class="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       <header class="flex items-center justify-between mb-3">
-        <h3 class="font-semibold text-sm text-orange-300">${NBA.esc(m.model_version)}</h3>
-        <span class="text-[11px] text-slate-500">${NBA.esc(m.season || '')} · ${NBA.tpe(m.evaluated_at).slice(0, 9)}</span>
+        <h3 class="font-semibold text-sm text-slate-100">${NBA.esc(m.model_version)}</h3>
+        <span class="text-xs text-slate-400">${NBA.esc(m.season || '')} · ${NBA.tpe(m.evaluated_at).slice(0, 9)}</span>
       </header>
       <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
-        ${cell('勝負命中率', NBA.pct(m.accuracy), accCls)}
+        ${cell('勝負命中率', NBA.pct(m.accuracy))}
         ${cell('讓分 ATS', NBA.pct(m.ats_accuracy))}
         ${cell('大小分', NBA.pct(m.ou_accuracy))}
         ${cell('上半場', NBA.pct(m.h1_accuracy))}
-        ${cell('模擬 ROI', m.sim_roi != null ? NBA.signed(m.sim_roi * 100, 2) + '%' : '—', roiCls)}
+        ${cell('模擬 ROI', m.sim_roi != null ? NBA.signed(m.sim_roi * 100, 2) + '%' : '無證據')}
         ${cell('Log Loss', NBA.fixed(m.log_loss, 4))}
         ${cell('Brier', NBA.fixed(m.brier, 4))}
         ${cell('樣本場次', m.n_games ?? '—')}
@@ -34,7 +32,7 @@
         ${cell('分差 MAE', NBA.fixed(m.mae_margin, 2))}
         ${cell('總分 MAE', NBA.fixed(m.mae_total, 2))}
       </div>
-      ${m.notes ? `<p class="text-[11px] text-slate-500 mt-3">${NBA.esc(m.notes)}</p>` : ''}
+      ${m.notes ? `<p class="text-xs text-slate-400 mt-3">${NBA.esc(m.notes)}</p>` : ''}
     </article>`;
   }
 
@@ -70,13 +68,13 @@
           ${statBox('勝 / 敗', `${s.win} / ${s.lose}`)}
           ${statBox('命中率', NBA.pct(s.hit_rate))}
           ${statBox('待結算', s.pending)}
-          ${statBox('總投注額', s.total_staked.toLocaleString())}
+          ${statBox('已結算投注額', NBA.money(s.total_staked))}
           ${statBox('損益', NBA.signed(s.pnl, 0), (s.pnl > 0 ? 'text-green-400' : s.pnl < 0 ? 'text-red-400' : ''))}
           ${statBox('實際 ROI', s.roi != null ? NBA.signed(s.roi * 100, 2) + '%' : '—', roiCls)}
         </div>
         ${
           curve.length
-            ? `<div class="relative h-64"><canvas id="pnl-chart"></canvas></div>`
+            ? `<div class="relative h-64"><canvas id="pnl-chart" role="img" aria-label="累積損益曲線：${curve.length} 筆已結算，目前累積 ${NBA.signed(curve[curve.length - 1].cumulative_pnl, 0)}">累積損益 ${NBA.signed(curve[curve.length - 1].cumulative_pnl, 0)}</canvas></div>`
             : NBA.empty('尚無已結算的投注紀錄。到「投注紀錄」頁新增並結算後，這裡會顯示損益曲線。', 'fa-receipt')
         }`;
 
@@ -113,7 +111,7 @@
     } catch (e) {
       if (e.status === 401) {
         pnlRoot.innerHTML = `<div class="rounded-lg border border-slate-700 bg-slate-900/60 p-6 text-center">
-          <i class="fas fa-lock text-2xl text-slate-600 mb-2"></i>
+          <i class="fas fa-lock text-2xl text-slate-400 mb-2"></i>
           <p class="text-sm text-slate-400 mb-3">個人投注損益為私人資料，請先登入</p>
           <a href="/login?next=/performance" class="inline-block px-3 py-1.5 rounded bg-orange-500 text-white text-sm">前往登入</a>
         </div>`;
@@ -125,7 +123,7 @@
 
   function statBox(label, value, cls = '') {
     return `<div class="rounded-lg bg-slate-800/50 p-2.5">
-      <div class="text-[10px] text-slate-500 mb-0.5">${label}</div>
+      <div class="text-xs text-slate-400 mb-0.5">${label}</div>
       <div class="text-sm font-bold num ${cls}">${value}</div>
     </div>`;
   }
