@@ -18,3 +18,13 @@
 - Node + 真實 Postgres adapter 的 12 場 fixture，上傳回應 202／queued；全程隨機暫存 schema，每次操作核對 search_path，測後清理完成。這不代表 Cloudflare 正式執行環境已驗收。
 
 此修正只涉及網站；助手 v1.0.0 不需重新安裝，沒有新增 migration。正式部署與使用者 Chrome 的完整真實同步結果須另記實測證據。
+
+## 正式重現後的補強
+
+acb42d3 正式部署後，實際 79,771 bytes 上傳在 store 階段仍連續兩次 CONNECTION_CLOSED。重連能保留安全失敗與冪等性，但不足以讓這筆內容完成寫入。相近大小的普通 Node／Postgres 隔離路徑可成功；本次不把這個差異推論成已證實的平台固定大小限制。
+
+新增內部 `twsport-inbox-gzip-v1` 格式：網站驗證原始盤口後，用 Workers 原生 CompressionStream gzip，再存為 ASCII base64 envelope。每次儲存的 envelope 上限 48 KiB，超限明確拒絕，不截斷盤口；原始上傳與 Python 解壓結果都維持 2 MiB 上限。Python 先向下相容部署，支援原 JSON 與壓縮 envelope；拒絕毀損、截斷、尾隨資料及超限展開。擷取時間、匹配、原始盤口 provenance、定價與 risk-v1 契約均不改。
+
+驗證：同步測試 27 passed；12 場公開 fixture 約 77 KiB 壓為 2.2 KiB 且 lossless；實際 TypeScript 編碼 → Python 解碼保留中文與毫秒時間。Python 純邏輯 23 passed；新舊格式實際 consumer 匯入／更新決策 2 passed（隨機隔離 schema）。網站 build 通過。先等待 decoder 部署成功，再啟用網站寫入壓縮格式；真實 Chrome 結果另記。
+
+另外以本機 workerd（與正式站相同 compatibility date）實測：77,145 bytes 的 12 場公開 fixture 編為 2,265 bytes，交給實際 Python decoder 後內容與時間完全一致。向下相容 decoder 的 Railway 部署 a24607ec-13fd-4bde-9e0f-962f2748593d（6307437）已 SUCCESS，之後才推送網站端編碼修正。

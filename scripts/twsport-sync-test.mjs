@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
+import { gunzipSync } from 'node:zlib';
+import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { createSessionToken } from '../src/lib/auth.ts';
 import routes from '../src/routes/twsport-sync.ts';
 import api from '../src/routes/api.ts';
-import { boundedJson, validateCapture } from '../src/lib/twsport-sync.ts';
+import { boundedJson, validateCapture, encodeInboxCapture, INBOX_VERSION, MAX_INBOX_BYTES } from '../src/lib/twsport-sync.ts';
 import { collectTwsport } from '../extensions/twsport-sync/collector.js';
 const schema = JSON.parse(readFileSync('pipeline/core/odds/browser_schema.json'));
 const original = JSON.parse(readFileSync('pipeline/tests/fixtures/odds/twsport_event_detail_h1_20261004.json')).data;
@@ -17,6 +19,7 @@ function scrub(value, kind) {
 const day = new Date(Date.now() + 8 * 3600000 + 86400000).toISOString().slice(0,10);
 const event = () => ({ ...scrub(original, 'event'), idfoevent: 'sync-fixture', tsstart: `${day}T08:00:00+08:00` });
 const payload = () => ({version:'twsport-browser-v1', events:[{captured_at:new Date().toISOString(), tournament:'美國職籃', event:event()}]});
+const decodeStored = text => { const envelope=JSON.parse(text); return JSON.parse(gunzipSync(Buffer.from(envelope.data,'base64')).toString('utf8')); };
 function fixture() {
   const sql = new DatabaseSync(':memory:');
   sql.exec('PRAGMA foreign_keys=ON');
@@ -60,7 +63,20 @@ await test('valid capture queues once and private payload never appears in recei
  assert.equal(r.status,202);assert.equal(r.body.job.state,'queued');assert.equal(r.body.job.payload,undefined);
  assert.equal((await f.request(`/twsport-sync/${id}/capture`,payload())).body.replay,true);
  const db=f.sql.prepare('SELECT * FROM browser_sync_jobs WHERE id=?').get(id);
- assert.equal(JSON.parse(db.payload).events[0].event.idfoevent,'sync-fixture');
+ assert.equal(decodeStored(db.payload).events[0].event.idfoevent,'sync-fixture');
+});
+await test('twelve-game Unicode capture stores as a small lossless inbox envelope',async f=>{
+ const p=payload();p.events=Array.from({length:12},(_,i)=>({...p.events[0],event:{...event(),idfoevent:'large-fixture-'+i}}));
+ assert.ok(Buffer.byteLength(JSON.stringify(p))>64*1024);
+ const encoded=await encodeInboxCapture(p);
+ assert.equal(JSON.parse(encoded).version,INBOX_VERSION);assert.ok(encoded.length<16*1024);assert.deepEqual(decodeStored(encoded),p);
+ const id=(await f.create()).body.job.id;
+ assert.equal((await f.request(`/twsport-sync/${id}/capture`,p)).status,202);
+ const saved=f.sql.prepare('SELECT payload FROM browser_sync_jobs').get().payload;
+ assert.ok(saved.length<=MAX_INBOX_BYTES);assert.deepEqual(decodeStored(saved),p);
+});
+await test('incompressible oversized inbox is rejected rather than sent as a large database bind',async()=>{
+ await assert.rejects(()=>encodeInboxCapture({data:randomBytes(100000).toString('base64')}),/capture_too_large/);
 });
 function disconnectCapture(f, mode) {
  const prepare=f.env.DB.prepare;let faults=0,writes=0;

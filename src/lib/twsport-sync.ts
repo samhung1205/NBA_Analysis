@@ -3,7 +3,24 @@ import { tpeDateString } from './time'
 
 export const SYNC_VERSION = 'twsport-browser-v1'
 export const MAX_CAPTURE_BYTES = 2 * 1024 * 1024
+export const INBOX_VERSION = 'twsport-inbox-gzip-v1'
+export const MAX_INBOX_BYTES = 48 * 1024
 export const ACTIVE_SYNC = "('capturing','queued','running')"
+
+/** Store a compact ASCII envelope, keeping a bounded database bind and the original capture times. */
+export async function encodeInboxCapture(payload: any): Promise<string> {
+  const input = new TextEncoder().encode(JSON.stringify(payload))
+  if (input.byteLength > MAX_CAPTURE_BYTES) throw new Error('capture_too_large')
+  const compressed = new Uint8Array(await new Response(
+    new Blob([input]).stream().pipeThrough(new CompressionStream('gzip'))
+  ).arrayBuffer())
+  let binary = ''
+  for (let n = 0; n < compressed.length; n += 8192)
+    binary += String.fromCharCode(...compressed.subarray(n, n + 8192))
+  const stored = JSON.stringify({ version: INBOX_VERSION, data: btoa(binary) })
+  if (stored.length > MAX_INBOX_BYTES) throw new Error('capture_too_large')
+  return stored
+}
 
 /** Bounded even without Content-Length (chunked requests). Never log the body. */
 export async function boundedJson(request: Request) {

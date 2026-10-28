@@ -55,7 +55,7 @@
 - 網站要求有效登入、相同 Origin、JSON、2 MiB 上限，先建立冪等工作，再接受一次 capture。其他使用者不能讀取或上傳該工作。全站單一 active 工作由 DB unique index 保護；Python 另有 schema 範圍的 advisory lock 與交易領取。
 - Python 再驗證白名單、時間、日期、重複賽事與合法市場，沿用台彩 parser、對戰匹配、快照冪等及過期保護。每場使用自己的 capture time，新增快照保留 job ID、擷取／接收時間。未變動報價仍沿用既有 last-seen 契約，工作與抓取紀錄保留稽核。
 - 接續執行既有 Python 定價、sizing 與該使用者的決策物化。部分匹配失敗或決策未完成時顯示 partial，不宣稱額度最新。未改模型、risk-v1、下注或結算策略；不回填歷史 paper 證據、不自動下注。
-- 原始 inbox payload 在完成、失敗或逾時清除；保留工作狀態、計數、時間、run IDs 與安全錯誤碼。正常盤口快照依既有稽核規則保存。
+- inbox payload 以有上限的 gzip envelope 儲存，Python 向下相容讀取舊 JSON；完成、失敗或逾時清除；保留工作狀態、計數、時間、run IDs 與安全錯誤碼。正常盤口快照依既有稽核規則保存。
 
 ## 使用範圍與停用
 

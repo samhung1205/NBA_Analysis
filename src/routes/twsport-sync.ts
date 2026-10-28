@@ -3,7 +3,7 @@ import type { AppBindings, Db } from '../db'
 import { getDb } from '../db'
 import { getCurrentUser } from '../lib/auth'
 import { addDays, todayTpe } from '../lib/time'
-import { ACTIVE_SYNC, boundedJson, shapeSyncJob, validateCapture } from '../lib/twsport-sync'
+import { ACTIVE_SYNC, boundedJson, encodeInboxCapture, shapeSyncJob, validateCapture } from '../lib/twsport-sync'
 
 const sync = new Hono<{ Bindings: AppBindings }>()
 const iso = () => new Date().toISOString()
@@ -104,10 +104,15 @@ sync.post('/twsport-sync/:id/capture', async (c) => {
       let payload: any
       try { payload = validateCapture(input, job, Date.now()) }
       catch (e) { return c.json({ error: (e as Error).message }, 400) }
+      stage = 'encode'
+      let stored: string
+      try { stored = await encodeInboxCapture(payload) }
+      catch (e) { if ((e as Error).message === 'capture_too_large') return c.json({ error: 'capture_too_large' }, 413); throw e }
       stage = 'store'
       await db.run(`UPDATE browser_sync_jobs SET payload = ?, received_at = ?, state = 'queued'
-        WHERE id = ? AND user_id = ? AND state = 'capturing' AND expires_at >= ?`, [JSON.stringify(payload), iso(), job.id, user.uid, iso()])
+        WHERE id = ? AND user_id = ? AND state = 'capturing' AND expires_at >= ?`, [stored, iso(), job.id, user.uid, iso()])
       stage = 'receipt'
+      console.info(JSON.stringify({ event: 'twsport_capture_queued', stored_bytes: stored.length }))
       return c.json({ job: shapeSyncJob(await db.one(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE id = ?`, [job.id])) }, 202)
     } catch (e) {
       const code = transportCode(e)
