@@ -21,6 +21,7 @@ VERSION = 'twsport-browser-v1'
 INBOX_VERSION = 'twsport-inbox-gzip-v1'
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024
 MAX_INBOX_BYTES = 48 * 1024
+PROCESSING_LEASE = timedelta(minutes=10)
 SCHEMA = json.loads(Path(__file__).with_name('browser_schema.json').read_text())
 HEARTBEAT = dict(source_key='browser_sync', display_name='Chrome 盤口匯入處理器', category='odds', expected_interval_min=1)
 
@@ -114,14 +115,14 @@ def validate_capture(payload: dict, job: dict, now: datetime) -> list[tuple[date
     return result
 
 
-def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_utc):
+def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_utc, progress=None):
     from .ingest import run_odds_job
     now = ensure_utc(now or clock())
     payload = decode_inbox(job['payload'])
     events = validate_capture(payload, job, now)
     run = run or run_odds_job
     summary = dict(games=0, markets=0, new=0, unchanged=0, stale=0, rejected=0, capture_times=[], run_ids=[],
-                   ingestion_method=VERSION, received_at=str(job.get('received_at')), decision_refreshed=False)
+                   ingestion_method=VERSION, received_at=str(job.get('received_at')), decision_refreshed=False, stage='importing')
     problem = False
     for captured, event in events:
         if ensure_utc(clock()) > ensure_utc(parse_utc(job['expires_at'])):
@@ -145,6 +146,8 @@ def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_
         if rep.run_id is not None:
             summary['run_ids'].append(rep.run_id)
         problem |= rep.outcome != 'success' or rep.n_matched == 0 or rep.n_snapshots_stale > 0 or rep.diagnostics.get('would_write', 0) == 0
+        if progress:
+            progress(summary)
     if summary['new'] + summary['unchanged'] == 0:
         return 'failed', summary, 'no_snapshots_imported'
     # Existing Python jobs remain the only authority for all pricing/sizing/capacity.
@@ -155,8 +158,14 @@ def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_
             from ..decision.job import decision_board_job
             def refresh():
                 as_of = now_utc()
+                summary['stage'] = 'pricing'
+                if progress: progress(summary)
                 pricing = pricing_job(as_of, db=db)
+                summary['stage'] = 'sizing'
+                if progress: progress(summary)
                 sizing = sizing_job(as_of, db=db)
+                summary['stage'] = 'decision'
+                if progress: progress(summary)
                 decision = decision_board_job(user_ids=[job['user_id']], db=db)
                 return not pricing.errors and not sizing.pricing_missing and not sizing.note and not decision.note and decision.users == 1
         summary['decision_refreshed'] = bool(refresh())
@@ -188,9 +197,19 @@ def browser_sync_job(*, db=None):
                 job = cur.fetchone()
                 if not job:
                     return
-                cur.execute("UPDATE browser_sync_jobs SET state='running', started_at=%s WHERE id=%s", (now_utc(), job['id']))
+                started = now_utc()
+                # The upload deadline stays five minutes; a claimed job gets its own bounded processing lease.
+                # validate_capture still rejects observations older than five minutes at processing start.
+                job['expires_at'] = started + PROCESSING_LEASE
+                cur.execute("UPDATE browser_sync_jobs SET state='running', started_at=%s, expires_at=%s WHERE id=%s",
+                            (started, job['expires_at'], job['id']))
             try:
-                state, summary, error = import_capture(job, db=db)
+                def progress(summary):
+                    # Reuse the lock connection; do not occupy another slot in the shared small pool.
+                    lock.execute("UPDATE browser_sync_jobs SET summary=%s WHERE id=%s AND state='running'",
+                                 (json.dumps(summary), job['id']))
+                    db.heartbeat(lock, status='ok', records_updated=summary.get('new', 0), **HEARTBEAT)
+                state, summary, error = import_capture(job, db=db, progress=progress)
             except Exception as exc:
                 # Do not log or persist arbitrary payload/exception text.
                 state, summary = 'failed', {'decision_refreshed': False}

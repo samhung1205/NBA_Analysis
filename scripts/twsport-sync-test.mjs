@@ -233,13 +233,14 @@ await test('extension uses only the exact sportsbook frame and does not double s
  const absent=background({frames:[{frameId:0,url:'https://evil.test/'}]});
  assert.equal((await absent.send({type:'NBA_TWSPORT_COLLECT',date:day})).error,'open_sportsbook');assert.equal(absent.opened,1);
 });
-async function frontend({captureError=null,uploadDisconnect=false}={}) {
+async function frontend({captureError=null,uploadDisconnect=false,runningProgress=false}={}) {
  let click,reads=0,events=0;
- const posts=[],button={disabled:true,textContent:'',addEventListener:(name,fn)=>{if(name==='click')click=fn}},status={textContent:''};
+ const messages=[];
+ const posts=[],button={disabled:true,textContent:'',addEventListener:(name,fn)=>{if(name==='click')click=fn}},status={get textContent(){return messages.at(-1)},set textContent(value){messages.push(value)}};
  const job={id:'ui-fixture',betting_day:day,state:'capturing'};
  const NBA={tpe:t=>t,get:async path=>{
   if(!path.includes('?id='))return {enabled:true,extension_id:'a'.repeat(32),job:null};
-  reads++;return {job:reads===1?{...job,state:'queued'}:{...job,state:'succeeded',summary:{markets:6,games:1,capture_times:['fixture-time']}}};
+  reads++;return {job:reads===1?{...job,state:runningProgress?'running':'queued',...(runningProgress?{summary:{games:12,markets:72,stage:'pricing'}}:{})}:{...job,state:'succeeded',summary:{markets:6,games:1,capture_times:['fixture-time']}}};
  },post:async(path,body)=>{
   posts.push({path,body});
   if(path.endsWith('/capture')){if(uploadDisconnect)throw new Error('network');return {job:{...job,state:'queued'}}}
@@ -252,8 +253,13 @@ async function frontend({captureError=null,uploadDisconnect=false}={}) {
  for(let n=0;n<4;n++)await new Promise(setImmediate);
  assert.equal(button.disabled,false);
  await click();
- return {posts,status,button,events};
+ return {posts,status,button,events,messages};
 }
+await test('frontend shows Python materialized progress while waiting for pricing',async()=>{
+ const r=await frontend({runningProgress:true});
+ assert.ok(r.messages.some(m=>m.includes('已處理 12 場、72 個市場')&&m.includes('正在更新定價')));
+ assert.equal(r.events,1);
+});
 await test('frontend completes prepare, one upload, receipt polling and decision refresh',async()=>{
  const r=await frontend();assert.equal(r.posts.length,2);assert.ok(r.status.textContent.includes('6 個市場'));
  assert.equal(r.events,1);assert.equal(r.button.disabled,false);

@@ -33,7 +33,11 @@
     if (!job) return;
     if (job.state === 'capturing') say('正在從一般 Chrome 的台彩頁面擷取盤口，請保持此頁開啟…');
     else if (job.state === 'queued') say('盤口已送達，等待 Python 驗證與匯入…');
-    else if (job.state === 'running') say('Python 正在驗證盤口、匯入並更新決策…');
+    else if (job.state === 'running') {
+      const s = job.summary || {};
+      const stages = { importing: '驗證及匯入盤口', pricing: '更新定價', sizing: '更新理論注碼', decision: '更新決策' };
+      say(`${s.games ? `已處理 ${s.games} 場、${s.markets ?? 0} 個市場；` : ''}Python 正在${stages[s.stage] || '驗證盤口、匯入並更新決策'}…`);
+    }
     else if (job.state === 'succeeded') {
       const s = job.summary || {};
       const times = s.capture_times || [];
@@ -49,7 +53,7 @@
   });
   function controls() { button.disabled = busy || !available; button.textContent = busy ? '同步進行中…' : '同步台彩盤口'; }
   async function poll(id) {
-    for (let n = 0; n < 105; n++) {
+    for (let n = 0; n < 240; n++) {
       const d = await NBA.get(`/api/twsport-sync?id=${encodeURIComponent(id)}`);
       render(d.job);
       if (!active(d.job)) {

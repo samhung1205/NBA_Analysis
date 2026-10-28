@@ -229,3 +229,25 @@ def test_concurrent_workers_claim_a_job_once(db, seeded, monkeypatch):
     with db.cursor() as cur:
         cur.execute('SELECT state,payload FROM browser_sync_jobs WHERE id=%s',(j['id'],));r=cur.fetchone()
         assert r['state']=='succeeded' and r['payload'] is None
+
+
+def test_claimed_job_has_processing_lease_without_relaxing_capture_freshness(db, seeded, monkeypatch):
+    j=setup_db_job(db, seeded)
+    original_expiry=bs.now_utc()+timedelta(seconds=30)
+    with db.cursor() as cur:
+        cur.execute('UPDATE browser_sync_jobs SET expires_at=%s WHERE id=%s',(original_expiry,j['id']))
+    monkeypatch.setenv('TWSPORT_SYNC_ENABLED','true')
+    def process(job, *, db, progress):
+        assert job['expires_at']>original_expiry+timedelta(minutes=9)
+        progress({'stage':'pricing','games':12,'markets':72,'new':72})
+        with db.cursor() as cur:
+            # Equivalent to a website poll just after the original upload deadline.
+            cur.execute("UPDATE browser_sync_jobs SET state='failed',error_code='expired' WHERE expires_at<%s",(original_expiry+timedelta(seconds=1),))
+            cur.execute('SELECT state,summary FROM browser_sync_jobs WHERE id=%s',(job['id'],));r=cur.fetchone()
+            assert r['state']=='running' and json.loads(r['summary'])['stage']=='pricing'
+        p=bs.decode_inbox(job['payload']);p['events'][0]['captured_at']=(bs.now_utc()-timedelta(minutes=6)).isoformat()
+        with pytest.raises(bs.CaptureError,match='capture_time_invalid'):
+            bs.validate_capture(p,job,bs.now_utc())
+        return 'succeeded',{'decision_refreshed':True},None
+    monkeypatch.setattr(bs,'import_capture',process)
+    bs.browser_sync_job(db=db)

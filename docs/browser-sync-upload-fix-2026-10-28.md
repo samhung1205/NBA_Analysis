@@ -28,3 +28,12 @@ acb42d3 正式部署後，實際 79,771 bytes 上傳在 store 階段仍連續兩
 驗證：同步測試 27 passed；12 場公開 fixture 約 77 KiB 壓為 2.2 KiB 且 lossless；實際 TypeScript 編碼 → Python 解碼保留中文與毫秒時間。Python 純邏輯 23 passed；新舊格式實際 consumer 匯入／更新決策 2 passed（隨機隔離 schema）。網站 build 通過。先等待 decoder 部署成功，再啟用網站寫入壓縮格式；真實 Chrome 結果另記。
 
 另外以本機 workerd（與正式站相同 compatibility date）實測：77,145 bytes 的 12 場公開 fixture 編為 2,265 bytes，交給實際 Python decoder 後內容與時間完全一致。向下相容 decoder 的 Railway 部署 a24607ec-13fd-4bde-9e0f-962f2748593d（6307437）已 SUCCESS，之後才推送網站端編碼修正。
+
+
+## 第一筆真實入庫與處理期限
+
+4964116 正式部署（Pages 66660617、Railway 4c863e26）後，使用者 Chrome 的 79,770 bytes 盤口成功壓成 8,045 bytes，capture 回應 202。工作 d950e6bc-9357-4d30-a76e-e624c77f44c3 已寫入 12 場、72 個真實市場；後續定價／注碼／決策尚未結束時，舊的共用五分鐘工作期限先將收據標為 expired。保留該失敗收據，不以人工改成成功。
+
+補強將上傳與處理期限分開：capturing／queued 仍是原五分鐘期限，worker 交易領取後才設定十分鐘 processing lease。Python 初次驗證仍拒絕超過五分鐘的 capture，不改 risk-v1 的 quote freshness 或額度有效性。逐場與定價／注碼／決策階段會保留 summary 進度及更新處理器心跳；使用持鎖連線寫進度，不增加連線池占用。前端持續輪詢並顯示階段，最後仍以真實結果判定 succeeded／partial／failed。
+
+驗證：同步前端與契約 28 passed、Python 純邏輯 23 passed、隔離 DB 6 passed（包含 processing lease 跨過原上傳期限仍有效，但六分鐘舊 capture 仍被拒絕）；網站 build 通過。
