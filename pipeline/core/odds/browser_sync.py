@@ -13,6 +13,7 @@ import zlib
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from contextlib import contextmanager
 
 from ..timeutil import ensure_utc, now_utc, parse_utc, tpe_date
 from . import twsport
@@ -28,6 +29,26 @@ HEARTBEAT = dict(source_key='browser_sync', display_name='Chrome 盤口匯入處
 
 class CaptureError(ValueError):
     pass
+
+
+class _ConnectionDb:
+    """Keep this serialized consumer on its already reserved connection, including nested jobs."""
+    def __init__(self, source, connection):
+        self._source, self._connection = source, connection
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+    @contextmanager
+    def cursor(self):
+        with self._connection.cursor() as cur:
+            yield cur
+
+    @contextmanager
+    def transaction(self):
+        with self._connection.transaction():
+            with self._connection.cursor() as cur:
+                yield cur
 
 
 def decode_inbox(raw):
@@ -187,12 +208,13 @@ def browser_sync_job(*, db=None):
         lock.execute("SELECT pg_try_advisory_lock(hashtext('browser_sync:' || current_schema())) AS ok")
         if not lock.fetchone()['ok']:
             return
+        worker_db = _ConnectionDb(db, lock.connection)
         try:
-            with db.cursor() as cur:
+            with worker_db.cursor() as cur:
                 cur.execute("UPDATE browser_sync_jobs SET state='failed', payload=NULL, error_code='expired', finished_at=%s "
                             "WHERE state IN ('capturing','queued','running') AND expires_at < %s", (now_utc(), now_utc()))
                 db.heartbeat(cur, status='ok', records_updated=0, **HEARTBEAT)
-            with db.transaction() as cur:
+            with worker_db.transaction() as cur:
                 cur.execute("SELECT * FROM browser_sync_jobs WHERE state='queued' ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED")
                 job = cur.fetchone()
                 if not job:
@@ -209,12 +231,12 @@ def browser_sync_job(*, db=None):
                     lock.execute("UPDATE browser_sync_jobs SET summary=%s WHERE id=%s AND state='running'",
                                  (json.dumps(summary), job['id']))
                     db.heartbeat(lock, status='ok', records_updated=summary.get('new', 0), **HEARTBEAT)
-                state, summary, error = import_capture(job, db=db, progress=progress)
+                state, summary, error = import_capture(job, db=worker_db, progress=progress)
             except Exception as exc:
                 # Do not log or persist arbitrary payload/exception text.
                 state, summary = 'failed', {'decision_refreshed': False}
                 error = str(exc) if isinstance(exc, CaptureError) else 'processing_failed'
-            with db.transaction() as cur:
+            with worker_db.transaction() as cur:
                 cur.execute("UPDATE browser_sync_jobs SET state=%s, summary=%s, error_code=%s, payload=NULL, finished_at=%s "
                             "WHERE id=%s AND state='running'", (state, json.dumps(summary), error, now_utc(), job['id']))
                 db.heartbeat(cur, status='ok', records_updated=summary.get('new', 0), **HEARTBEAT)

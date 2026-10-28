@@ -37,3 +37,11 @@ acb42d3 正式部署後，實際 79,771 bytes 上傳在 store 階段仍連續兩
 補強將上傳與處理期限分開：capturing／queued 仍是原五分鐘期限，worker 交易領取後才設定十分鐘 processing lease。Python 初次驗證仍拒絕超過五分鐘的 capture，不改 risk-v1 的 quote freshness 或額度有效性。逐場與定價／注碼／決策階段會保留 summary 進度及更新處理器心跳；使用持鎖連線寫進度，不增加連線池占用。前端持續輪詢並顯示階段，最後仍以真實結果判定 succeeded／partial／failed。
 
 驗證：同步前端與契約 28 passed、Python 純邏輯 23 passed、隔離 DB 6 passed（包含 processing lease 跨過原上傳期限仍有效，但六分鐘舊 capture 仍被拒絕）；網站 build 通過。
+
+## 小型連線池的實際互等
+
+後續驗收發現 browser_sync 會持有 advisory-lock 連線，再從共用四條連線池借第二條做清理／領取／匯入。正式日誌在這些階段出現 `psycopg_pool.PoolTimeout: couldn't get a connection after 30.00 sec`，導致工作停在 queued。已確認 Railway 與本機都是 5432、相同 DB 目標，並非 Transaction pooler 設定。
+
+新增 consumer 專用的 connection-bound DB adapter：清理、交易領取、逐場匯入、pricing、sizing、decision、進度與結案都重用已保留的同一連線；cursor 與 transaction 仍各自建立，既有交易原子性／隔離層級保留，不修改全域 pool、不加大正式連線上限。該 serialized consumer 才使用此 adapter，其他排程不變。
+
+隔離 DB 六項再次全部通過；其中壓縮格式的真實 consumer 案例將 pool max 設為 1，成功匯入六種市場、更新決策、清除 inbox，證明不再等待第二條連線。Python 純邏輯 23 passed。

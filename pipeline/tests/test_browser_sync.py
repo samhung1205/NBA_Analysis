@@ -168,6 +168,9 @@ def setup_db_job(db, seeded):
 def test_real_worker_imports_six_markets_refreshes_and_clears_inbox(db, seeded, monkeypatch, compressed):
     j=setup_db_job(db, seeded)
     if compressed:
+        # A held advisory lock must not require another pool slot to import, refresh or finalize.
+        db.get_pool().resize(min_size=1,max_size=1)
+        assert db.get_pool().max_size==1
         with db.cursor() as cur:
             cur.execute('UPDATE browser_sync_jobs SET payload=%s WHERE id=%s',(compressed_inbox(j['payload']),j['id']))
     monkeypatch.setenv('TWSPORT_SYNC_ENABLED','true')
