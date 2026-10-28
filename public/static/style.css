@@ -106,10 +106,19 @@ table.stat-table tbody tr:hover { background: rgba(30, 41, 59, 0.5); }
   .opp-main { grid-template-columns: minmax(0, 1.4fr) 3.4rem 3.8rem minmax(0, 1.3fr) minmax(0, 1.6fr); }
   .opp-status { grid-column: auto; justify-content: flex-end; }
 }
-.record-btn {
-  font-size: 0.7rem; padding: 0.2rem 0.55rem; border-radius: 0.3rem; background: #f97316; color: white; font-weight: 600;
+/* 主要記錄鈕：深字配橘（≈6.7:1；白字配橘只有 2.8:1）。次要「我已下注」用描邊，合規由伺服器判斷 */
+.record-btn, .record-btn-alt {
+  font-size: 0.7rem; padding: 0.2rem 0.55rem; border-radius: 0.3rem; font-weight: 600; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center;
 }
+.record-btn { background: #f97316; color: #0b1120; }
 .record-btn:hover { background: #fb923c; }
+.record-btn-alt { border: 1px solid #475569; color: #cbd5e1; background: transparent; font-weight: 500; }
+.record-btn-alt:hover { background: #1e293b; border-color: #64748b; }
+.opp-status > .record-btn, .opp-status > .record-btn-alt { margin-left: auto; }
+@media (min-width: 900px) { .opp-status > .record-btn, .opp-status > .record-btn-alt { margin-left: 0; } }
+.opp-row.is-target { box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.55); border-radius: 0.5rem; transition: box-shadow 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+:focus-visible { outline: 2px solid #fb923c; outline-offset: 2px; }
 .opp-details > summary, details.intl > summary { cursor: pointer; font-size: 0.65rem; color: #64748b; margin-top: 0.25rem; }
 .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.25rem 0.75rem; margin-top: 0.35rem; }
 .detail-grid dt, .kv dt { font-size: 0.6rem; color: #64748b; }
@@ -123,5 +132,94 @@ table.stat-table tbody tr:hover { background: rgba(30, 41, 59, 0.5); }
 .exposure-meter { height: 4px; background: #1e293b; border-radius: 2px; margin-top: 3px; overflow: hidden; }
 .exposure-meter > span { display: block; height: 100%; background: linear-gradient(90deg, #f97316, #ef4444); }
 .inp { width: 100%; margin-top: 0.25rem; background: #1e293b; border: 1px solid #334155; border-radius: 0.3rem; padding: 0.35rem 0.5rem; font-size: 0.85rem; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.75); display: flex; align-items: flex-start; justify-content: center; padding: 3rem 1rem; z-index: 60; overflow-y: auto; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.75); display: flex; align-items: flex-start; justify-content: center; padding: 3rem 1rem; z-index: 60; overflow-y: auto; overscroll-behavior: contain; }
 .modal-card { width: 100%; max-width: 30rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.75rem; padding: 1rem 1.1rem; }
+body.modal-open { overflow: hidden; }
+/* 送出列黏在視窗底部：手機鍵盤彈出、內容捲動時「確認記錄」仍在拇指範圍 */
+.modal-actions {
+  position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem;
+  margin-top: 1rem; padding-top: 0.6rem; background: #0f172a; border-top: 1px solid #1e293b;
+}
+.rec-primary, .rec-secondary {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0.4rem 0.8rem; border-radius: 0.35rem; font-size: 0.75rem; white-space: nowrap;
+}
+.rec-primary { background: #f97316; color: #0b1120; font-weight: 600; }
+.rec-primary:hover { background: #fb923c; }
+.rec-primary:disabled { opacity: 0.6; cursor: progress; }
+.rec-secondary { border: 1px solid #334155; color: #cbd5e1; }
+.rec-secondary:hover { background: #1e293b; }
+.rec-fill { font-size: 0.72rem; color: #fdba74; border: 1px dashed rgba(249, 115, 22, 0.45); border-radius: 0.35rem; padding: 0.3rem 0.6rem; }
+.rec-fill:hover { background: rgba(249, 115, 22, 0.08); }
+.rec-context { font-size: 0.72rem; color: #cbd5e1; background: rgba(100, 116, 139, 0.12); border: 1px solid #334155; border-radius: 0.4rem; padding: 0.45rem 0.6rem; margin-bottom: 0.75rem; }
+
+/* 未送出記錄的提醒（被打斷後回來） */
+.draft-notice {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; margin-bottom: 0.5rem; padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(14, 165, 233, 0.35); background: rgba(8, 47, 73, 0.35); border-radius: 0.5rem; font-size: 0.75rem; color: #e0f2fe;
+}
+.draft-btn, .draft-btn-ghost { display: inline-flex; align-items: center; padding: 0.3rem 0.65rem; border-radius: 0.35rem; font-size: 0.75rem; white-space: nowrap; }
+.draft-btn { background: #0ea5e9; color: #04131f; font-weight: 600; }
+.draft-btn:hover { background: #38bdf8; }
+.draft-btn-ghost { color: #bae6fd; border: 1px solid rgba(14, 165, 233, 0.35); }
+.draft-btn-ghost:hover { background: rgba(14, 165, 233, 0.1); }
+
+/* ---------------- 手機：底部分頁列 + 決策中心底部額度列 ---------------- */
+:root { --bnav-h: 3.5rem; --safe-b: env(safe-area-inset-bottom, 0px); }
+.bnav {
+  position: fixed; inset-inline: 0; bottom: 0; z-index: 45; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+  background: #0b1222; border-top: 1px solid #1e293b; padding-bottom: var(--safe-b);
+}
+.bnav-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.15rem; min-height: var(--bnav-h);
+  font-size: 0.75rem; color: #94a3b8; -webkit-tap-highlight-color: transparent;
+}
+.bnav-icon { display: grid; place-items: center; width: 2.5rem; height: 1.6rem; border-radius: 999px; font-size: 0.85rem; }
+.bnav-item[aria-current="page"] { color: #fdba74; font-weight: 600; }
+.bnav-item[aria-current="page"] .bnav-icon { background: rgba(249, 115, 22, 0.16); }
+.bnav-item:active .bnav-icon { background: rgba(148, 163, 184, 0.14); }
+
+.dock {
+  position: fixed; inset-inline: 0; bottom: 0; z-index: 44; display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.5rem 1rem calc(0.5rem + var(--safe-b)); background: #0f172a; border-top: 1px solid #334155;
+  box-shadow: 0 -8px 24px -12px rgba(2, 6, 23, 0.9);
+}
+.dock[hidden] { display: none; }
+.dock-label { font-size: 0.7rem; color: #94a3b8; }
+.dock-value { font-size: 1rem; font-weight: 700; color: #f1f5f9; line-height: 1.25; }
+.dock-sub { font-size: 0.7rem; color: #94a3b8; }
+.dock-btn {
+  display: inline-flex; align-items: center; justify-content: center; min-height: 2.75rem; padding: 0 0.9rem; border-radius: 0.5rem;
+  font-size: 0.8rem; font-weight: 600; white-space: nowrap; border: 1px solid #475569; color: #e2e8f0;
+}
+.dock-btn-primary { background: #0ea5e9; border-color: #0ea5e9; color: #04131f; }
+
+@media (max-width: 767px) {
+  body { padding-bottom: calc(var(--bnav-h) + var(--safe-b)); }
+  .dock { bottom: calc(var(--bnav-h) + var(--safe-b)); padding-bottom: 0.5rem; }
+  body.has-dock { padding-bottom: calc(var(--bnav-h) + 4.25rem + var(--safe-b)); }
+  /* 記錄視窗改為底部抽屜 */
+  .modal-backdrop { align-items: flex-end; padding: 0; }
+  .modal-card {
+    max-width: none; max-height: 92dvh; overflow-y: auto; overscroll-behavior: contain; border-radius: 1rem 1rem 0 0; border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .modal-actions { padding-bottom: calc(0.75rem + var(--safe-b)); margin-inline: -1.1rem; padding-inline: 1.1rem; }
+}
+@media (min-width: 768px) {
+  .bnav { display: none; }
+  body.has-dock { padding-bottom: 4.25rem; }
+}
+@media (min-width: 1024px) {
+  .dock { display: none !important; }
+  body.has-dock { padding-bottom: 0; }
+}
+
+/* 觸控裝置：互動目標 ≥ 44px；輸入框 16px 避免 iOS 聚焦時放大頁面 */
+@media (pointer: coarse) {
+  .record-btn, .record-btn-alt { min-height: 2.75rem; padding: 0 0.95rem; font-size: 0.8rem; }
+  .opp-details > summary, details.intl > summary { padding-block: 0.85rem; line-height: 1rem; font-size: 0.75rem; }
+  .inp { font-size: 16px; min-height: 2.75rem; }
+  .rec-primary, .rec-secondary, .draft-btn, .draft-btn-ghost, .rec-fill { min-height: 2.75rem; padding-inline: 1rem; font-size: 0.85rem; }
+  #decision-page [data-dday], #decision-refresh, #decision-date { min-height: 2.75rem; }
+  #decision-refresh { min-width: 2.75rem; }
+}

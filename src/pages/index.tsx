@@ -68,13 +68,13 @@ pages.get('/decision', (c) => {
           </p>
         </div>
         <div class="flex items-center gap-2">
-          <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs">
-            <button data-dday="0" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">今日</button>
-            <button data-dday="1" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">明日</button>
+          <div class="flex rounded-lg border border-slate-800 overflow-hidden text-xs" role="group" aria-label="Betting day">
+            <button type="button" data-dday="0" aria-pressed="true" class="px-3 py-1.5 bg-orange-500/15 text-orange-300 font-medium">今日</button>
+            <button type="button" data-dday="1" aria-pressed="false" class="px-3 py-1.5 text-slate-400 hover:bg-slate-800">明日</button>
           </div>
-          <input type="date" id="decision-date" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" />
-          <button id="decision-refresh" class="px-2 py-1.5 rounded border border-slate-700 text-xs text-slate-300 hover:bg-slate-800" title="重新整理">
-            <i class="fas fa-rotate"></i>
+          <input type="date" id="decision-date" aria-label="選擇 betting day" class="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs" />
+          <button type="button" id="decision-refresh" class="px-2 py-1.5 rounded border border-slate-700 text-xs text-slate-300 hover:bg-slate-800" title="重新整理" aria-label="重新整理">
+            <i class="fas fa-rotate" aria-hidden="true"></i>
           </button>
         </div>
       </div>
@@ -88,6 +88,7 @@ pages.get('/decision', (c) => {
         </aside>
       </div>
       <div id="record-modal-root"></div>
+      <div id="decision-dock" class="dock" hidden></div>
     </section>,
     { title: '今日決策中心', nav: 'decision', script: '/static/js/decision.js' }
   )

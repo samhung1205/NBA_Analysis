@@ -15,10 +15,43 @@
   const evidenceEl = $('decision-evidence');
   const healthEl = $('decision-health');
   const modalRoot = $('record-modal-root');
+  const dock = $('decision-dock');
   const picker = $('decision-date');
   const tabs = document.querySelectorAll('[data-dday]');
-  let currentDate = NBA.tpeDateStr(0);
+  // modal 掛在 body 下，開啟時才能把其餘頁面設為 inert（焦點不會跑到背景）
+  document.body.appendChild(modalRoot);
+  // 日期寫在網址（?date=），手機分頁被系統回收或重新整理後仍回到同一個 betting day
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const urlDate = new URLSearchParams(location.search).get('date');
+  let currentDate = DATE_RE.test(urlDate || '') ? urlDate : NBA.tpeDateStr(0);
   let board = null;
+  let loadSeq = 0;
+  let lastLoadedAt = 0;
+  let resumeAfterLoad = false;
+  let lastJumpKey = null;
+
+  /*
+   * 記錄草稿（只存在這台裝置）：去台彩下注途中被打斷、分頁被回收時，回來可以接著填。
+   * 保留同一個 client_request_id：若上次其實已送出但沒收到回應，重送會被伺服器辨識為同一筆（replay），不會重複建立。
+   */
+  const DRAFT_KEY = 'nba.decision.recordDraft.v1';
+  const DRAFT_TTL_MS = 12 * 3600 * 1000;
+  function readDraft() {
+    try {
+      const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (!d || !d.request_id || Date.now() - d.saved_at > DRAFT_TTL_MS) { clearDraft(); return null; }
+      return d;
+    } catch { return null; }
+  }
+  function saveDraft(d) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, saved_at: Date.now() })); } catch { /* 無痕或封鎖儲存：不影響記錄 */ } }
+  function clearDraft() { try { localStorage.removeItem(DRAFT_KEY); } catch { /* 同上 */ } }
+
+  // 跨物化穩定的機會鍵（opportunity id 依 snapshot 而變）：用於刷新後保留展開狀態、焦點與草稿對應
+  const oppKey = (o) => [o.game_id, o.market, o.side, o.bookmaker, o.display_line ?? ''].join('|');
+  const COMPLIANCE = {
+    compliant: '符合策略', user_override: '超出額度（你已確認）', missing_context: '缺少風險脈絡（額度無法驗證）',
+    outside_model: '模型外（非可操作機會）', manual_unlinked: '手動記錄',
+  };
 
   const MARKET = { ml: '不讓分', spread: '讓分', total: '大小分', h1_ml: '上半場獨贏', h1_spread: '上半場讓分', h1_total: '上半場大小' };
   const GROUP = {
@@ -50,13 +83,15 @@
     const [icon, cls, en, zh] = GROUP[g] || ['fa-circle-question', 'grp-inactive', g || '—', ''];
     return `<span class="grp-badge ${cls}" title="${esc(extra || zh)}"><i class="fas ${icon}"></i>${en}<span class="opacity-70 font-normal">${zh}</span></span>`;
   };
-  const sideText = (o, g) => {
+  // 純文字版（草稿標籤用）；sideText 為 HTML 跳脫版
+  const sidePlain = (o, g) => {
     const s = o.side;
     const name = s === 'home' ? NBA.teamName(g.home) : s === 'away' ? NBA.teamName(g.away)
       : s === 'over' ? '大分' : s === 'under' ? '小分' : s === 'draw' ? '和局' : s;
     const line = o.display_line != null && o.market_type !== 'moneyline' ? ` ${o.market_type === 'spread' ? NBA.signed(o.display_line) : NBA.fixed(o.display_line)}` : '';
-    return `${esc(name)}${line}`;
+    return `${name}${line}`;
   };
+  const sideText = (o, g) => esc(sidePlain(o, g));
   const ago = (iso) => {
     if (!iso) return '—';
     const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -78,7 +113,30 @@
     const health = d.system_health || {};
     if (health.overall === 'degraded') msgs.push(['amber', 'fa-heart-pulse', '部分資料來源異常（見 System readiness 面板）。']);
     const cls = { red: 'border-red-900/60 bg-red-950/30 text-red-200', amber: 'border-amber-900/60 bg-amber-950/20 text-amber-200', slate: 'border-slate-700 bg-slate-900/60 text-slate-300' };
-    banner.innerHTML = msgs.map(([c, i, m]) => `<div class="rounded-lg border ${cls[c]} px-3 py-2 text-xs mb-2"><i class="fas ${i} mr-1.5"></i>${m}</div>`).join('');
+    banner.innerHTML = draftNotice(d) + msgs.map(([c, i, m]) => `<div class="rounded-lg border ${cls[c]} px-3 py-2 text-xs mb-2"><i class="fas ${i} mr-1.5"></i>${m}</div>`).join('');
+  }
+
+  /** 找得到對應機會的草稿才回傳（先比 id，再比穩定鍵）；其他 betting day 的草稿回傳 null */
+  function draftTarget(dr, d) {
+    if (!dr || !d || dr.betting_day !== d.betting_day) return null;
+    return findOpp(dr.opp_id) || findOppByKey(dr.key);
+  }
+
+  function draftNotice(d) {
+    const dr = readDraft();
+    if (!dr) return '';
+    const otherDay = dr.betting_day !== d.betting_day;
+    const hit = otherDay ? null : draftTarget(dr, d);
+    const when = ago(new Date(dr.saved_at).toISOString());
+    const action = otherDay
+      ? `<button type="button" class="draft-btn" data-draft="goto">前往 ${esc(dr.betting_day)} 繼續</button>`
+      : hit ? '<button type="button" class="draft-btn" data-draft="resume">繼續記錄</button>'
+        : `<a class="draft-btn" href="/bets?game_id=${encodeURIComponent(dr.game_id)}">改用手動記錄</a>`;
+    const gone = !otherDay && !hit ? '<span class="block text-sky-200/80 mt-0.5">原機會已不在目前的決策板（可能已重新物化或盤口變動）。</span>' : '';
+    return `<div class="draft-notice" role="status">
+      <p class="min-w-0 mr-auto"><i class="fas fa-file-pen mr-1.5" aria-hidden="true"></i>有一筆尚未送出的下注記錄：<strong>${esc(dr.label)}</strong>${otherDay ? `（${esc(dr.betting_day)}）` : ''}<span class="text-sky-200/80"> · ${when}填寫</span>${gone}</p>
+      <div class="flex items-center gap-2">${action}<button type="button" class="draft-btn-ghost" data-draft="discard">捨棄</button></div>
+    </div>`;
   }
 
   function tile(label, value, sub, cls = '') {
@@ -123,11 +181,16 @@
         : `<span class="text-slate-500">${pct(o.user_adjusted_fraction)}（重新計算中）</span>`)
       : o.decision_status === 'bankroll_unavailable' && o.user_adjusted_fraction != null ? `<span class="text-slate-500">${pct(o.user_adjusted_fraction)}（無金額）</span>`
         : '<span class="text-slate-600">0</span>';
-    const recordBtn = valid && (o.status_group === 'actionable' || o.status_group === 'review')
-      ? `<button class="record-btn" data-opp="${o.id}"><i class="fas fa-pen-to-square mr-1"></i>記錄下注</button>` : '';
+    // 下注是已在台彩發生的事實：每個台彩機會都留記錄入口，合規與否由 /api/bets 依最新物化狀態判斷。
+    // 可操作且額度有效的用主按鈕；其餘用次要按鈕，送出時伺服器會在不符合策略時先要求確認。
+    const k = esc(oppKey(o));
+    const primary = valid && (o.status_group === 'actionable' || o.status_group === 'review');
+    const verb = primary ? '記錄下注' : '我已下注';
+    const label = `${esc(NBA.teamName(g.away))} @ ${esc(NBA.teamName(g.home))} ${esc(MARKET[o.market] || o.market)} ${sideText(o, g)} 賠率 ${NBA.odds(o.decimal_odds)}`;
+    const recordBtn = `<button type="button" class="${primary ? 'record-btn' : 'record-btn-alt'}" data-opp="${o.id}" data-fk="rec|${k}" aria-label="${verb}：${label}"><i class="fas fa-pen-to-square mr-1" aria-hidden="true"></i>${verb}</button>`;
     const warn = (o.warnings || []).filter((w) => w !== 'seed_fixture');
     return `
-    <div class="opp-row" data-group="${o.status_group}">
+    <div class="opp-row" data-group="${o.status_group}" data-k="${k}">
       <div class="opp-main">
         <div class="min-w-0">
           <div class="text-xs text-slate-400">${esc(MARKET[o.market] || o.market)}</div>
@@ -138,8 +201,8 @@
         <div class="text-right min-w-0"><div class="text-[10px] text-slate-500">新增額度</div><div class="num text-sm leading-tight">${capacity}</div></div>
         <div class="opp-status">${groupBadge(o.status_group, o.status_text?.zh)}<span class="text-[10px] text-slate-500">${esc(o.status_text?.zh || o.decision_status)}</span>${recordBtn}</div>
       </div>
-      <details class="opp-details">
-        <summary>詳細（機率 / Kelly / exposure / 來源）</summary>
+      <details class="opp-details" data-k="${k}">
+        <summary data-fk="sum|${k}">詳細（機率 / Kelly / exposure / 來源）</summary>
         <dl class="detail-grid">
           <div><dt>原始隱含</dt><dd>${pct(o.raw_implied_prob, 1)}</dd></div>
           <div><dt>去水公允（proportional-v1）</dt><dd>${pct(o.fair_no_vig_prob, 1)}</dd></div>
@@ -219,8 +282,8 @@
         ${tw.length && g.taiwan_odds_state && g.taiwan_odds_state !== 'available' ? twMissing(g) : ''}
       </section>
       ${intl.length ? `
-      <details class="mt-2 intl">
-        <summary class="text-[11px] text-slate-400"><i class="fas fa-globe mr-1"></i>International comparison（${intl.length}）— International diagnostic · Not Taiwan Sports Lottery evidence</summary>
+      <details class="mt-2 intl" data-k="intl|${g.game_id}">
+        <summary class="text-[11px] text-slate-400" data-fk="sum|intl|${g.game_id}"><i class="fas fa-globe mr-1"></i>International comparison（${intl.length}）— International diagnostic · Not Taiwan Sports Lottery evidence</summary>
         <div class="overflow-x-auto"><table class="stat-table text-xs mt-1"><thead><tr><th>Bookmaker</th><th>Outcome</th><th>賠率</th><th>EV（診斷）</th></tr></thead>
         <tbody>${intl.map(intlRow).join('')}</tbody></table></div>
       </details>` : ''}
@@ -238,7 +301,52 @@
     const games = [...d.games].sort((a, b) => (order[a.status_group] ?? 5) - (order[b.status_group] ?? 5)
       || String(a.tipoff_utc).localeCompare(String(b.tipoff_utc)));
     gamesEl.innerHTML = `<div class="grid gap-4 2xl:grid-cols-2">${games.map(gameCard).join('')}</div>`;
-    gamesEl.querySelectorAll('.record-btn').forEach((btn) => btn.addEventListener('click', () => openRecord(Number(btn.dataset.opp))));
+  }
+
+  /* --------------------------- mobile dock --------------------------- */
+
+  // 手機 / 平板底部：當日剩餘額度（只顯示 Python 物化值）＋下一個可操作 / 繼續未送出的記錄
+  function renderDock(d) {
+    if (!dock) return;
+    if (!d || !d.games.length) { dock.hidden = true; document.body.classList.remove('has-dock'); return; }
+    const e = d.actual_exposure || {};
+    const cur = (d.bankroll || {}).currency || '';
+    const s = d.summary || {};
+    const rsOk = d.risk_state && d.risk_state.capacity_valid;
+    let value;
+    let sub;
+    if (!d.materialized) { value = '—'; sub = '決策檢視尚未產生'; }
+    else if (!rsOk) { value = '重新計算中'; sub = '更新前不顯示可用額度'; }
+    else if (e.remaining_day_amount == null) { value = e.remaining_day_fraction != null ? pct(e.remaining_day_fraction) : '—'; sub = '無可用金額'; }
+    else { value = amt(e.remaining_day_amount, cur); sub = `剩餘 ${pct(e.remaining_day_fraction)} · 可操作 ${s.n_actionable ?? 0}${s.n_review ? ` · 需檢視 ${s.n_review}` : ''}`; }
+    const targets = gamesEl.querySelectorAll('.record-btn').length;
+    const resumable = draftTarget(readDraft(), d);
+    const btn = resumable
+      ? '<button type="button" class="dock-btn dock-btn-primary" data-dock="resume"><i class="fas fa-file-pen mr-1.5" aria-hidden="true"></i>繼續記錄</button>'
+      : targets ? `<button type="button" class="dock-btn" data-dock="next"><i class="fas fa-arrow-down mr-1.5" aria-hidden="true"></i>下一個可操作（${targets}）</button>` : '';
+    dock.innerHTML = `
+      <div class="min-w-0 mr-auto">
+        <div class="dock-label">當日剩餘額度</div>
+        <div class="dock-value num${e.remaining_day_fraction === 0 && rsOk ? ' text-red-400' : ''}">${value}</div>
+        <div class="dock-sub truncate">${sub}</div>
+      </div>${btn}`;
+    dock.hidden = false;
+    document.body.classList.add('has-dock');
+  }
+
+  function jumpToNextActionable() {
+    const rows = [...gamesEl.querySelectorAll('.record-btn')].map((b) => b.closest('.opp-row'));
+    if (!rows.length) return;
+    // 剛跳到的列還在畫面內 → 往下一個；否則從視窗上緣下方第一個開始；都看過了就回到第一個
+    const cur = rows.findIndex((r) => r.dataset.k === lastJumpKey);
+    const inView = (r) => { const b = r.getBoundingClientRect(); return b.top >= 0 && b.bottom <= window.innerHeight; };
+    const next = (cur >= 0 && inView(rows[cur]) ? rows[cur + 1] : rows.find((r) => r.getBoundingClientRect().top > 96)) || rows[0];
+    lastJumpKey = next.dataset.k;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    next.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    next.querySelector('.record-btn')?.focus({ preventScroll: true });
+    next.classList.add('is-target');
+    setTimeout(() => next.classList.remove('is-target'), 1600);
   }
 
   /* -------------------------- side panels -------------------------- */
@@ -283,54 +391,103 @@
   /* -------------------------- record modal -------------------------- */
 
   function findOpp(id) {
+    if (!board) return null;
     for (const g of board.games) for (const o of g.taiwan) if (o.id === id) return { o, g };
     return null;
   }
+  function findOppByKey(key) {
+    if (!board || !key) return null;
+    for (const g of board.games) for (const o of g.taiwan) if (oppKey(o) === key) return { o, g };
+    return null;
+  }
 
-  function openRecord(id) {
+  // datetime-local 需要本地時間字串；上限設為現在（伺服器也拒絕未來時間）
+  const localNow = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+  function setBackgroundInert(on) {
+    for (const el of document.body.children) if (el !== modalRoot && el.tagName !== 'SCRIPT') el.toggleAttribute('inert', on);
+    document.body.classList.toggle('modal-open', on);
+  }
+
+  function openRecord(id, trigger, draft) {
     const hit = findOpp(id);
     if (!hit) return;
     const { o, g } = hit;
     const cur = (board.bankroll || {}).currency || '';
-    const requestId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    const valid = o.capacity_valid;
+    const primary = valid && (o.status_group === 'actionable' || o.status_group === 'review');
+    const groupZh = (GROUP[o.status_group] || [])[3] || o.status_group || '—';
+    const requestId = draft?.request_id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    const returnFk = trigger?.dataset?.fk || `rec|${oppKey(o)}`;
+    // 額度只在 Python 物化狀態有效時顯示；重算中 / 過期不顯示建議金額，也不預填
+    const capacityText = valid && o.suggested_stake_amount != null
+      ? `${amt(o.suggested_stake_amount, cur)}（${pct(o.user_adjusted_fraction)} of day-start ${amt(o.day_start_bankroll)}）`
+      : '—（目前額度無法驗證）';
+    const context = primary ? '' : `
+        <p class="rec-context"><i class="fas fa-circle-info mr-1.5" aria-hidden="true"></i>目前狀態：${esc(groupZh)}${valid ? '' : '（額度無法驗證）'}。
+          送出時由伺服器依最新狀態判斷合規；不符合策略時會先要求你確認。</p>`;
+    const fill = valid && o.suggested_stake_amount != null
+      ? `<button type="button" class="rec-fill" data-fill="${Number(o.suggested_stake_amount)}">帶入建議上限 ${amt(o.suggested_stake_amount, cur)}</button>` : '';
     modalRoot.innerHTML = `
     <div class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="rec-title">
       <form id="rec-form" class="modal-card">
-        <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-pen-to-square text-orange-400 mr-1.5"></i>記錄下注</h2>
-        <p class="text-[11px] text-slate-500 mb-3">請先在台灣運彩完成下注，再填入<strong>實際成交</strong>的賠率與金額。平台不會替你下注。</p>
+        <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-pen-to-square text-orange-400 mr-1.5" aria-hidden="true"></i>記錄下注</h2>
+        <p class="text-[11px] text-slate-400 mb-3">請先在台灣運彩完成下注，再填入<strong>實際成交</strong>的賠率與金額。平台不會替你下注。</p>
+        ${context}
         <dl class="kv mb-3">
           <div><dt>比賽</dt><dd>${NBA.matchup(g.away, g.home)} · ${esc(g.tipoff_display)}</dd></div>
           <div><dt>來源</dt><dd>台灣運彩（${esc(o.bookmaker)}）</dd></div>
           <div><dt>玩法 / 方向</dt><dd>${esc(MARKET[o.market] || o.market)} · ${sideText(o, g)}</dd></div>
           <div><dt>平台觀察賠率</dt><dd class="num">${NBA.odds(o.decimal_odds)}（${NBA.tpe(o.odds_fetched_at)}）</dd></div>
-          <div><dt>建議最大新增額度</dt><dd class="num">${amt(o.suggested_stake_amount, cur)}（${pct(o.user_adjusted_fraction)} of day-start ${amt(o.day_start_bankroll)}）</dd></div>
+          <div><dt>建議最大新增額度</dt><dd class="num">${capacityText}</dd></div>
           <div><dt>EV（平台觀察賠率）</dt><dd class="num">${evText(o.ev_per_unit)} · 尚在前瞻驗證</dd></div>
         </dl>
         <div class="grid grid-cols-2 gap-3">
-          <label class="block"><span class="text-[11px] text-slate-500">實際賠率</span>
-            <input name="odds" type="number" step="0.01" min="1.01" required value="${o.decimal_odds ?? ''}" class="inp num" /></label>
-          <label class="block"><span class="text-[11px] text-slate-500">實際金額（${esc(cur || '—')}）</span>
-            <input name="stake" type="number" step="1" min="1" required value="${o.suggested_stake_amount ?? ''}" class="inp num" /></label>
-          <label class="block col-span-2"><span class="text-[11px] text-slate-500">下注時間（選填，預設現在）</span>
-            <input name="placed_at" type="datetime-local" class="inp" /></label>
-          <label class="block col-span-2"><span class="text-[11px] text-slate-500">備註（選填）</span>
-            <input name="note" type="text" maxlength="200" class="inp" /></label>
+          <label class="block"><span class="text-[11px] text-slate-400">實際賠率</span>
+            <input name="odds" type="number" inputmode="decimal" step="0.01" min="1.01" required value="${draft?.odds ?? o.decimal_odds ?? ''}" class="inp num" /></label>
+          <label class="block"><span class="text-[11px] text-slate-400">實際金額（${esc(cur || '—')}）</span>
+            <input name="stake" type="number" inputmode="numeric" step="1" min="1" required value="${esc(draft?.stake ?? '')}" class="inp num" /></label>
+          ${fill ? `<div class="col-span-2 -mt-1">${fill}</div>` : ''}
+          <label class="block col-span-2"><span class="text-[11px] text-slate-400">下注時間（留空＝現在；晚點才記錄請改成實際下注時間）</span>
+            <input name="placed_at" type="datetime-local" max="${localNow()}" value="${esc(draft?.placed_at ?? '')}" class="inp" /></label>
+          <label class="block col-span-2"><span class="text-[11px] text-slate-400">備註（選填）</span>
+            <input name="note" type="text" maxlength="200" value="${esc(draft?.note ?? '')}" class="inp" /></label>
         </div>
-        <p id="rec-odds-note" class="text-[11px] text-slate-500 mt-2 hidden">實際賠率與平台觀察不同：兩者都會保存（參考盤口快照不會被覆寫）。</p>
+        <p id="rec-odds-note" class="text-[11px] text-slate-400 mt-2 hidden">實際賠率與平台觀察不同：兩者都會保存（參考盤口快照不會被覆寫）。</p>
         <div id="rec-confirm" class="hidden mt-3 rounded border border-amber-800/60 bg-amber-950/30 p-2 text-[11px] text-amber-200"></div>
-        <div class="flex items-center justify-end gap-2 mt-4">
-          <span id="rec-msg" class="text-xs mr-auto"></span>
-          <button type="button" id="rec-cancel" class="px-3 py-1.5 rounded border border-slate-700 text-xs">取消</button>
-          <button type="submit" id="rec-submit" class="px-3 py-1.5 rounded bg-orange-500 hover:bg-orange-400 text-white text-xs font-medium">確認記錄</button>
+        <div class="modal-actions">
+          <span id="rec-msg" class="text-xs mr-auto" role="status"></span>
+          <button type="button" id="rec-cancel" class="rec-secondary">取消</button>
+          <button type="submit" id="rec-submit" class="rec-primary">確認記錄</button>
         </div>
       </form>
     </div>`;
     const form = $('rec-form');
-    const close = () => { modalRoot.innerHTML = ''; };
-    $('rec-cancel').onclick = close;
-    form.odds.addEventListener('input', () => {
-      $('rec-odds-note').classList.toggle('hidden', Number(form.odds.value) === Number(o.decimal_odds));
+    const close = () => {
+      modalRoot.innerHTML = '';
+      setBackgroundInert(false);
+      // 焦點回到該機會的按鈕（從底部列 / 橫幅恢復草稿時，按鈕可能在畫面外，讓瀏覽器捲到它）
+      document.querySelector(`[data-fk="${CSS.escape(returnFk)}"]`)?.focus();
+    };
+    const cancel = () => { clearDraft(); close(); renderBanner(board); renderDock(board); };
+    setBackgroundInert(true);
+    modalRoot.onkeydown = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); cancel(); } };
+    $('rec-cancel').onclick = cancel;
+    const syncOddsNote = () => $('rec-odds-note').classList.toggle('hidden', Number(form.odds.value) === Number(o.decimal_odds));
+    syncOddsNote();
+    form.odds.addEventListener('input', syncOddsNote);
+    form.querySelector('[data-fill]')?.addEventListener('click', (ev) => {
+      form.stake.value = ev.currentTarget.dataset.fill;
+      form.stake.dispatchEvent(new Event('input', { bubbles: true }));
+      form.stake.focus();
     });
+    // 一開始輸入就存草稿（同一個 request id），被打斷後可從橫幅或底部列接著填
+    form.addEventListener('input', () => saveDraft({
+      opp_id: o.id, key: oppKey(o), game_id: g.game_id, betting_day: board.betting_day, request_id: requestId,
+      label: `${NBA.teamName(g.away)} @ ${NBA.teamName(g.home)} ${MARKET[o.market] || o.market} ${sidePlain(o, g)}${form.stake.value ? ` · ${form.stake.value}` : ''}`,
+      odds: form.odds.value, stake: form.stake.value, placed_at: form.placed_at.value, note: form.note.value,
+    }));
+    (form.stake.value ? $('rec-submit') : form.stake).focus();
     let needConfirm = null;
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
@@ -348,11 +505,12 @@
         if (needConfirm.requires_reason && !payload.override_reason) { msg.className = 'text-xs text-red-400 mr-auto'; msg.textContent = '請填寫原因'; return; }
       }
       $('rec-submit').disabled = true;
+      msg.className = 'text-xs text-slate-400 mr-auto';
+      msg.textContent = '送出中…';
       try {
         const res = await NBA.post('/api/bets', payload);
-        msg.className = 'text-xs text-green-400 mr-auto';
-        msg.textContent = `已記錄 #${res.id}（${res.bet?.strategy_compliance || ''}）— 風險額度重新計算中`;
-        setTimeout(() => { close(); load(currentDate); }, 900);
+        clearDraft();
+        showReceipt(res, payload);
       } catch (e) {
         $('rec-submit').disabled = false;
         if (e.status === 409 && e.data?.error === 'confirmation_required') {
@@ -371,48 +529,146 @@
           msg.textContent = e.data?.message || e.message;
         } else {
           msg.className = 'text-xs text-red-400 mr-auto';
-          msg.textContent = e.message;
+          msg.textContent = e.status ? e.message : `${e.message}（連線中斷？草稿已保留，可直接再按一次；同一筆不會重複建立）`;
         }
       }
     });
+
+    // 成功後留在視窗裡顯示收據，按「完成」才關閉並重新載入決策板
+    function showReceipt(res, payload) {
+      const bet = res.bet || {};
+      const compliance = bet.strategy_compliance || res.risk_check?.compliance;
+      form.outerHTML = `
+      <div class="modal-card" role="document">
+        <h2 id="rec-title" class="text-sm font-semibold mb-1"><i class="fas fa-circle-check text-green-400 mr-1.5" aria-hidden="true"></i>${res.replay ? `這筆先前已記錄（#${res.id}），未重複建立` : `已記錄 #${res.id}`}</h2>
+        <p class="text-[11px] text-slate-400 mb-3" role="status">風險額度重新計算中，約一分鐘內更新；更新前決策板不顯示可用額度。</p>
+        <dl class="kv mb-1">
+          <div><dt>比賽</dt><dd>${NBA.matchup(g.away, g.home)}</dd></div>
+          <div><dt>玩法 / 方向</dt><dd>${esc(MARKET[o.market] || o.market)} · ${sideText(o, g)}</dd></div>
+          <div><dt>實際賠率</dt><dd class="num">${NBA.odds(bet.odds ?? payload.odds)}</dd></div>
+          <div><dt>實際金額</dt><dd class="num">${amt(bet.stake ?? payload.stake, cur)}</dd></div>
+          <div><dt>策略判定</dt><dd>${esc(COMPLIANCE[compliance] || compliance || '—')}</dd></div>
+        </dl>
+        <div class="modal-actions">
+          <a href="/bets" class="rec-secondary">查看投注紀錄</a>
+          <button type="button" id="rec-done" class="rec-primary">完成</button>
+        </div>
+      </div>`;
+      modalRoot.onkeydown = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); done(); } };
+      const done = () => { close(); load(currentDate, { silent: true }); };
+      $('rec-done').onclick = done;
+      $('rec-done').focus();
+    }
   }
 
   /* ------------------------------ load ------------------------------ */
 
-  async function load(date) {
-    currentDate = date;
+  function syncDate(date) {
     if (picker) picker.value = date;
-    gamesEl.innerHTML = `<div class="grid gap-4">${NBA.skeletonCards(3)}</div>`;
-    summaryEl.innerHTML = '';
-    banner.innerHTML = '';
+    tabs.forEach((t) => {
+      const on = NBA.tpeDateStr(Number(t.dataset.dday)) === date;
+      t.classList.toggle('bg-orange-500/15', on);
+      t.classList.toggle('text-orange-300', on);
+      t.classList.toggle('font-medium', on);
+      t.classList.toggle('text-slate-400', !on);
+      t.setAttribute('aria-pressed', String(on));
+    });
+    const url = new URL(location.href);
+    if (url.searchParams.get('date') !== date) {
+      url.searchParams.set('date', date);
+      history.replaceState(history.state, '', url);
+    }
+  }
+
+  // 背景刷新時保留：展開中的明細、捲動位置、鍵盤焦點（以跨物化穩定的鍵對應）
+  function captureView() {
+    return {
+      open: [...document.querySelectorAll('#decision-page details[open][data-k]')].map((el) => el.dataset.k),
+      focus: document.activeElement?.closest?.('[data-fk]')?.dataset.fk || null,
+      y: window.scrollY,
+    };
+  }
+  function restoreView(v) {
+    for (const k of v.open) document.querySelector(`#decision-page details[data-k="${CSS.escape(k)}"]`)?.setAttribute('open', '');
+    if (Math.abs(window.scrollY - v.y) > 2) window.scrollTo(0, v.y);
+    if (v.focus) document.querySelector(`[data-fk="${CSS.escape(v.focus)}"]`)?.focus({ preventScroll: true });
+  }
+
+  /**
+   * silent：自動刷新 / 回到分頁 / 記錄完成後使用，不清空畫面、不閃骨架，保留閱讀狀態；記錄視窗開著時不刷新。
+   * 失敗時一律改顯示錯誤、不保留舊額度（無法確認是否仍有效）。
+   */
+  async function load(date, { silent = false } = {}) {
+    if (silent && modalRoot.innerHTML) return;
+    const keep = silent && date === currentDate && board ? captureView() : null;
+    const seq = ++loadSeq;
+    currentDate = date;
+    syncDate(date);
+    if (!keep) {
+      gamesEl.innerHTML = `<div class="grid gap-4">${NBA.skeletonCards(3)}</div>`;
+      summaryEl.innerHTML = '';
+      banner.innerHTML = '';
+      renderDock(null);
+    }
     try {
-      board = await NBA.get(`/api/decision-board?date=${encodeURIComponent(date)}`);
+      const next = await NBA.get(`/api/decision-board?date=${encodeURIComponent(date)}`);
+      if (seq !== loadSeq) return; // 期間又切換了日期 / 重新載入：丟棄較舊的回應
+      board = next;
+      lastLoadedAt = Date.now();
       renderBanner(board);
       renderSummary(board);
       renderGames(board);
       renderEvidence(board);
       renderHealth(board);
+      renderDock(board);
+      if (keep) restoreView(keep);
+      if (resumeAfterLoad) { resumeAfterLoad = false; resumeDraft(); }
     } catch (e) {
+      if (seq !== loadSeq) return;
       board = null;
+      summaryEl.innerHTML = '';
+      banner.innerHTML = '';
+      renderDock(null);
       if (e.status === 401) {
         gamesEl.innerHTML = `<div class="rounded-lg border border-slate-700 bg-slate-900/60 p-6 text-center">
           <i class="fas fa-lock text-2xl text-slate-600 mb-2"></i>
           <p class="text-sm text-slate-400 mb-3">決策中心包含個人 bankroll 與實際下注，請先登入</p>
-          <a href="/login?next=/decision" class="inline-block px-3 py-1.5 rounded bg-orange-500 text-white text-sm">前往登入</a></div>`;
+          <a href="/login?next=${encodeURIComponent(location.pathname + location.search)}" class="inline-block px-3 py-1.5 rounded bg-orange-500 text-white text-sm">前往登入</a></div>`;
       } else {
         gamesEl.innerHTML = NBA.error(`載入決策中心失敗：${e.message}（API 錯誤；不顯示任何額度）`);
       }
     }
   }
 
-  tabs.forEach((t) => t.addEventListener('click', () => {
-    tabs.forEach((x) => { x.classList.remove('bg-orange-500/15', 'text-orange-300', 'font-medium'); x.classList.add('text-slate-400'); });
-    t.classList.add('bg-orange-500/15', 'text-orange-300', 'font-medium');
-    t.classList.remove('text-slate-400');
-    load(NBA.tpeDateStr(Number(t.dataset.dday)));
-  }));
+  function resumeDraft() {
+    const hit = draftTarget(readDraft(), board);
+    if (hit) openRecord(hit.o.id, null, readDraft());
+  }
+
+  // 事件委派：背景刷新重建 DOM 後，按鈕仍然有效
+  gamesEl.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-opp]');
+    if (btn) openRecord(Number(btn.dataset.opp), btn);
+  });
+  banner.addEventListener('click', (ev) => {
+    const act = ev.target.closest('[data-draft]')?.dataset.draft;
+    if (act === 'resume') resumeDraft();
+    else if (act === 'goto') { const dr = readDraft(); if (dr) { resumeAfterLoad = true; load(dr.betting_day); } }
+    else if (act === 'discard') { clearDraft(); if (board) { renderBanner(board); renderDock(board); } }
+  });
+  dock?.addEventListener('click', (ev) => {
+    const act = ev.target.closest('[data-dock]')?.dataset.dock;
+    if (act === 'resume') resumeDraft();
+    else if (act === 'next') jumpToNextActionable();
+  });
+
+  tabs.forEach((t) => t.addEventListener('click', () => load(NBA.tpeDateStr(Number(t.dataset.dday)))));
   if (picker) picker.addEventListener('change', () => picker.value && load(picker.value));
   $('decision-refresh').addEventListener('click', () => load(currentDate));
-  setInterval(() => { if (!modalRoot.innerHTML && document.visibilityState === 'visible') load(currentDate); }, 60000);
+  setInterval(() => { if (document.visibilityState === 'visible') load(currentDate, { silent: true }); }, 60000);
+  // 從台彩 App 切回來（或頁面從 bfcache 還原）時立即更新，不等下一個 60 秒
+  const refreshIfIdle = () => { if (document.visibilityState === 'visible' && Date.now() - lastLoadedAt > 20000) load(currentDate, { silent: true }); };
+  document.addEventListener('visibilitychange', refreshIfIdle);
+  window.addEventListener('pageshow', (ev) => { if (ev.persisted) refreshIfIdle(); });
   load(currentDate);
 })();

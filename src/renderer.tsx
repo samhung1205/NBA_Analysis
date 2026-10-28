@@ -7,14 +7,15 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
   const nav = (props as any).nav as string | undefined
   const bodyScript = (props as any).script as string | undefined
 
+  // short：手機底部分頁列的標籤（7 項全部可見，不必橫向捲動）
   const navItems = [
-    { key: 'decision', href: '/decision', icon: 'fa-compass', label: '決策中心' },
-    { key: 'games', href: '/', icon: 'fa-basketball', label: '賽事總覽' },
-    { key: 'injuries', href: '/injuries', icon: 'fa-kit-medical', label: '傷病中心' },
-    { key: 'performance', href: '/performance', icon: 'fa-chart-line', label: '回測 / 績效' },
-    { key: 'bets', href: '/bets', icon: 'fa-receipt', label: '投注紀錄' },
-    { key: 'bankroll', href: '/bankroll', icon: 'fa-wallet', label: '資金' },
-    { key: 'status', href: '/status', icon: 'fa-heart-pulse', label: '系統狀態' },
+    { key: 'decision', href: '/decision', icon: 'fa-compass', label: '決策中心', short: '決策' },
+    { key: 'games', href: '/', icon: 'fa-basketball', label: '賽事總覽', short: '賽事' },
+    { key: 'injuries', href: '/injuries', icon: 'fa-kit-medical', label: '傷病中心', short: '傷病' },
+    { key: 'performance', href: '/performance', icon: 'fa-chart-line', label: '回測 / 績效', short: '績效' },
+    { key: 'bets', href: '/bets', icon: 'fa-receipt', label: '投注紀錄', short: '投注' },
+    { key: 'bankroll', href: '/bankroll', icon: 'fa-wallet', label: '資金', short: '資金' },
+    { key: 'status', href: '/status', icon: 'fa-heart-pulse', label: '系統狀態', short: '系統' },
   ]
 
   return (
@@ -32,27 +33,27 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
         <link href="/static/style.css" rel="stylesheet" />
       </head>
       <body class="bg-slate-950 text-slate-100 min-h-screen antialiased">
-        <header id="site-header" class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40">
+        {/* 手機上導覽移到底部分頁列，頂部只剩品牌與帳號，不必常駐 */}
+        <header id="site-header" class="border-b border-slate-800 bg-slate-900/80 backdrop-blur md:sticky md:top-0 z-40">
           <div class="max-w-7xl mx-auto px-4">
             <div class="flex items-center justify-between h-14">
               <a href="/" class="flex items-center gap-2 font-bold text-orange-400 shrink-0">
-                <i class="fas fa-basketball"></i>
-                <span class="hidden sm:inline">NBA 預測平台</span>
-                <span class="sm:hidden">NBA</span>
+                <i class="fas fa-basketball" aria-hidden="true"></i>
+                <span>NBA 預測平台</span>
               </a>
-              <nav id="main-nav" class="flex items-center gap-1 overflow-x-auto scrollbar-none">
+              <nav id="main-nav" aria-label="主要導覽" class="hidden md:flex items-center gap-1 overflow-x-auto scrollbar-none">
                 {navItems.map((item) => (
                   <a
                     href={item.href}
+                    aria-current={nav === item.key ? 'page' : undefined}
                     class={`px-2.5 py-1.5 rounded-md text-sm whitespace-nowrap transition ${
                       nav === item.key
                         ? 'bg-orange-500/15 text-orange-300 font-medium'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
                     }`}
                   >
-                    <i class={`fas ${item.icon} mr-1 text-xs`}></i>
-                    <span class="hidden md:inline">{item.label}</span>
-                    <span class="md:hidden">{item.label.slice(0, 2)}</span>
+                    <i class={`fas ${item.icon} mr-1 text-xs`} aria-hidden="true"></i>
+                    <span>{item.label}</span>
                   </a>
                 ))}
               </nav>
@@ -85,6 +86,15 @@ export const renderer = jsxRenderer(({ children, Layout, ...props }) => {
             </p>
           </div>
         </footer>
+
+        <nav id="bottom-nav" class="bnav" aria-label="主要導覽">
+          {navItems.map((item) => (
+            <a href={item.href} class="bnav-item" aria-current={nav === item.key ? 'page' : undefined}>
+              <span class="bnav-icon"><i class={`fas ${item.icon}`} aria-hidden="true"></i></span>
+              <span>{item.short}</span>
+            </a>
+          ))}
+        </nav>
 
         <script src="/static/js/common.js"></script>
         {bodyScript ? <script src={bodyScript}></script> : null}
