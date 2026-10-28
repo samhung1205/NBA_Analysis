@@ -1,6 +1,6 @@
 # 免費 Chrome 台彩同步（browser-sync-v1）
 
-2026-10-28：使用者已授權正式啟用；0013 已以單一交易套用並確認 RLS／API 權限，網站與排程器部署中。正式入口為 `https://webapp-e3e.pages.dev`。沒有新增資料 API 訂閱費；現有雲端服務仍有用量。真實台彩讀取與全流程仍需使用者在一般桌面 Chrome 安裝助手後實測，不能以 fixture 測試代替。
+2026-10-28：使用者已授權正式啟用；0013 已以單一交易套用並確認 RLS／API 權限，網站與排程器已正式部署並啟用。正式入口為 `https://webapp-e3e.pages.dev`。沒有新增資料 API 訂閱費；現有雲端服務仍有用量。真實台彩讀取與全流程仍需使用者在一般桌面 Chrome 安裝助手後實測，不能以 fixture 測試代替。
 
 ## 使用者只需完成這幾步
 
@@ -27,7 +27,7 @@
    node scripts/build-twsport-extension.mjs --site https://你的網站
    ```
 
-   預設輸出至被 Git 忽略的 `.browser-extension/`。同一資料夾重新打包會沿用公開 manifest key，維持擴充套件 ID。保存此資料夾；換網站或 ID 都必須重新核對兩側設定。輸出的 `TWSPORT_EXTENSION_ID` 是公開識別碼，不是密鑰。不要把不同環境的套件混用。
+   預設輸出至被 Git 忽略的 `.browser-extension/`。同一資料夾重新打包會沿用公開 manifest key；全新資料夾則讀取版本控制內的 `extensions/twsport-sync/manifest-key.txt`，維持正式擴充套件 ID。保存此資料夾；換網站或 ID 都必須重新核對兩側設定。輸出的 `TWSPORT_EXTENSION_ID` 是公開識別碼，不是密鑰。不要把不同環境的套件混用。
 
 2. 在 Chrome 的擴充功能頁開啟開發人員模式，選「載入未封裝項目」，選擇輸出資料夾。確認權限只有 `scripting`、`webNavigation`，與台彩的兩個網域；沒有 cookies、debugger、帳戶或全網站權限。安裝需由使用者審閱並完成。
 
@@ -85,3 +85,15 @@ DB 測試先核對 `tests/conftest.py` 的隨機 schema／search_path 隔離。�
 - 已為 `http://127.0.0.1:3187` 打包本機測試套件（未安裝）；該項為前一階段的本機驗證。後續已另為正式 origin 打包並提供 ZIP；沒有對台彩發出測試請求。
 
 正式套件：`public/static/downloads/nba-twsport-sync.zip`（v1.0.0），SHA-256 `7518967e809dbebf920c286238baff26965b47434316c42a8da9274867481006`。只含 manifest、background、collector、公開 origin／schema，沒有密鑰、cookie 或 HAR。正式 0013 SHA-256：`80727193b89b62d8b7613e85130b8ae1e068570d7f02ed30be532f42e78fcafd`。
+
+## 正式啟用紀錄（2026-10-28 20:46 TPE）
+
+- 程式 commit `987ea94907c4db60ca501dd1fd35e3f070724d03` 已推送 main。
+- Cloudflare production 部署 `038acace-066e-45f6-b63a-af9851d5c6b3` 成功，網站旗標 true、ID 與發布 ZIP 一致；保留 DATABASE_URL／SESSION_SECRET。
+- Railway production 部署 `2fa84597-6a9a-4c69-8b5e-00c37f8c2859` SUCCESS；`TWSPORT_SYNC_ENABLED=true`、原自動爬蟲 `TWSPORT_ENABLED=false`。啟動日誌確認註冊 browser_sync 並沿用持久模型 artifact。
+- 正式 DB 0013 已提交，新連線確認成功；完整唯讀權限檢查 PASS：36 表、1 view、8 次角色讀取遭拒，problems=[]。
+- 部署後唯讀心跳：browser_sync／decision_board／market_pricing／bet_sizing 均 ok，browser_sync 檢查時 9 秒內；佇列 0、台彩快照 0、bets／bet_events 0、bankroll_ledger 1。沒有為驗收寫入假盤口或測試投注。
+- 一般瀏覽器實際開啟正式安裝頁、healthz（ok:true）；匿名同步與賽事盤口端點均回傳 unauthorized。正式 ZIP 已經瀏覽器下載，SHA-256 與發布檔一致，已解壓縮至本機 Downloads/NBA-Twsport-Sync。
+- 終端 urllib 的公開頁探測收到 403，一般瀏覽器可正常使用；未繞過任何防護，未據此宣稱終端 HTTP smoke 通過。未在正式站執行會寫入的 API smoke。
+
+仍需使用者手動：桌面 Chrome 載入解壓縮資料夾、使用同一設定檔正常載入台彩 NBA、登入本平台，按一次同步。尚未安裝／授權助手，也沒有對台彩執行真實擷取；因此首次真實盤口的內容覆蓋、來源可讀性與端到端收據仍未驗證。遇到阻擋或格式改變會停止，不能保證本次部署已解決來源限制。

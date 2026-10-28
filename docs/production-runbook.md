@@ -7,7 +7,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
                                                                       ▲
  Railway "nba-scheduler" (Python, 19 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
- The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — manual HAR import)
+ The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — user-initiated Chrome sync / HAR fallback)
 ```
 
 ## 1. Frozen rules (never change for operational reasons)
@@ -204,7 +204,7 @@ Collects the official pre-game assignments (https://official.nba.com/referee-ass
 
 ## 4e. Chrome 盤口同步（2026-10-28）
 
-免費同步改由使用者桌面 Chrome 正常開啟台彩，決策中心要求擷取後交給 Python；不需要 HAR 或付費資料 API。安裝、0013 migration、兩側旗標、登入限制與回滾注意事項見 [browser-sync-guide.md](browser-sync-guide.md)。第 19 個 `browser_sync` job 每 15 秒處理佇列，預設停用、不抓外部資料。本次已依使用者正式授權套用 0013（單一交易與版本紀錄；新表 RLS、anon／authenticated 有效權限皆拒絕）。網站／Railway 部署驗證進度及使用者安裝步驟見同步指南。
+免費同步改由使用者桌面 Chrome 正常開啟台彩，決策中心要求擷取後交給 Python；不需要 HAR 或付費資料 API。安裝、0013 migration、兩側旗標、登入限制與回滾注意事項見 [browser-sync-guide.md](browser-sync-guide.md)。第 19 個 `browser_sync` job 每 15 秒處理佇列，預設停用、不抓外部資料。本次已依使用者正式授權套用 0013（單一交易與版本紀錄；新表 RLS、anon／authenticated 有效權限皆拒絕）。網站 `038acace` 與 Railway `2fa84597` 已部署成功，處理器旗標啟用、心跳健康，模型沿用。使用者尚需安裝 Chrome 助手與完成首次真實擷取；完整證據與操作見同步指南。
 
 ## 5. States
 

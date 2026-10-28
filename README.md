@@ -175,7 +175,7 @@
 
 ## 6. 匯入台彩盤口（HAR）
 
-台彩網站以 Cloudflare 防護，自動化擷取會被擋，本專案**不繞過**，改用一般瀏覽器手動匯出：
+可先用已部署的[免費 Chrome 同步助手](docs/browser-sync-guide.md)，省去 HAR。以下保留手動 HAR 備援：台彩網站以 Cloudflare 防護，本專案**不繞過**，可用一般瀏覽器手動匯出：
 
 1. 用一般 Chrome 打開台彩 NBA 頁面 → 開啟 DevTools → **Network** 分頁 → 等 NBA 盤口載入。
 2. 在單場詳情開啟全場與上半場玩法，等回應完成後選 **Export HAR (sanitized)**，存到 `pipeline/captures/`（已被 git 忽略）。需保留回應內容，不需要匯出 Cookie / Authorization。
@@ -195,7 +195,7 @@
 
 注意：盤口時間以 HAR 實際擷取時間為準；超過 2 小時預設拒絕匯入，但 **T-60 策略還要求擷取在開賽前 120～60 分鐘，且盡快匯入、建議在 T-60 前完成**。`--inspect` 成功只代表可解析，不代表 actionable。詳見 [資料來源處理方案](docs/data-source-access-2026-10-15.md) 與 [production-runbook.md](docs/production-runbook.md) §7。
 
-2026-10-28 已依免費需求實作 **Chrome 同步助手**：一般桌面 Chrome 正常開啟台彩 NBA → 決策中心按「同步台彩盤口」→ Python 驗證匯入並更新決策，不必匯出 HAR、不需付費資料 API。一次性安裝、設定與限制見[同步指南](docs/browser-sync-guide.md)。目前僅完成本機實作與隔離驗證，**尚未安裝助手、套用正式 0013 或部署；真實台彩仍待實測**。HAR 維持備援，未採用付費 JBot。
+2026-10-28 已依免費需求實作 **Chrome 同步助手**：一般桌面 Chrome 正常開啟台彩 NBA → 決策中心按「同步台彩盤口」→ Python 驗證匯入並更新決策，不必匯出 HAR、不需付費資料 API。一次性安裝、設定與限制見[同步指南](docs/browser-sync-guide.md)。**0013、正式網站與 Railway 已完成部署啟用**；使用者需在桌面 Chrome 載入助手，第一次真實台彩同步仍待實測。HAR 維持備援，未採用付費 JBot。
 
 ## 7. 名詞解釋
 
@@ -394,7 +394,7 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 
 **使用限制**
 
-- 正式台彩目前仍用 HAR；本機新增免費 Chrome 同步，啟用與真實擷取待驗證，國際盤只作診斷參考。
+- 免費 Chrome 同步已正式部署；須先安裝助手，首次真實台彩擷取仍待使用者實測。HAR 保留備援，國際盤只作診斷參考。
 - 模型預測分佈中心 μ = 0 是評測後的修正，2026-27 賽季才是真正的前瞻驗證期。
 - 沒有歷史投注獲利證據；歷史模型準確率不等於能贏盤口。
 - Supabase 免費專案閒置會被暫停，排程器長時間停機後需手動 Restore。

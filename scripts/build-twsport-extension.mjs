@@ -12,6 +12,10 @@ const out = resolve(args.includes('--out') ? value('--out') : '.browser-extensio
 await mkdir(out, { recursive: true });
 let key;
 try { key = JSON.parse(await readFile(resolve(out, 'manifest.json'), 'utf8')).key; } catch { /* first package */ }
+// A fresh clone must rebuild the published extension with the same public ID.
+if (!key) {
+  try { key = (await readFile('extensions/twsport-sync/manifest-key.txt', 'utf8')).trim(); } catch { /* unpublished extension */ }
+}
 if (!key) key = generateKeyPairSync('rsa', { modulusLength: 2048 }).publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 const id = [...createHash('sha256').update(Buffer.from(key, 'base64')).digest().subarray(0, 16)]
   .map(b => String.fromCharCode(97 + (b >> 4), 97 + (b & 15))).join('');
