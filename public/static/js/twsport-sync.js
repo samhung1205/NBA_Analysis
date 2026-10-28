@@ -22,6 +22,8 @@
     cooldown: '請等待 30 秒再同步。',
     expired: '工作已逾時，結果未確認；請重新整理後檢查，再決定是否重試。',
     capture_cancelled: '上次擷取未完成，沒有排入匯入工作。',
+    capture_store_unavailable: '上傳時資料庫連線中斷，自動重試仍未完成。請重新整理確認原工作後，再同步一次。',
+    capture_store_failed: '伺服器未能完成盤口儲存，請重新整理確認原工作；錯誤已記錄，請回報此訊息。',
     partial_import_or_refresh: '盤口已部分匯入，或決策尚未完成更新；請檢查系統狀態，不把舊額度當作最新額度。',
     no_snapshots_imported: '沒有成功匯入可用盤口，請確認對戰、時間與系統狀態。',
     processing_failed: 'Python 匯入失敗，請檢查系統狀態；未宣稱資料已更新。',

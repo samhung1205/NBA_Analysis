@@ -8,8 +8,14 @@ import { ACTIVE_SYNC, boundedJson, shapeSyncJob, validateCapture } from '../lib/
 const sync = new Hono<{ Bindings: AppBindings }>()
 const iso = () => new Date().toISOString()
 const requestId = (v: any) => typeof v === 'string' && /^[\w:-]{8,100}$/.test(v)
+const JOB_COLUMNS = 'id, user_id, client_request_id, betting_day, state, created_at, expires_at, received_at, started_at, finished_at, summary, error_code'
+function transportCode(error: any): string | null {
+  const codes = ['CONNECTION_CLOSED', 'CONNECTION_ENDED', 'CONNECTION_DESTROYED', 'CONNECT_TIMEOUT', 'ECONNRESET', 'EPIPE']
+  return codes.find(code => error?.code === code || new RegExp(`\\b${code}\\b`).test(String(error?.message || ''))) || null
+}
 async function schemaReady(db: Db) {
-  try { await db.all('SELECT id FROM browser_sync_jobs WHERE 1 = 0'); return true } catch { return false }
+  try { await db.all('SELECT id FROM browser_sync_jobs WHERE 1 = 0'); return true }
+  catch (e) { if (transportCode(e)) throw e; return false }
 }
 async function expire(db: Db) {
   await db.run(`UPDATE browser_sync_jobs SET state = 'failed', payload = NULL, error_code = 'expired', finished_at = ?
@@ -41,8 +47,8 @@ sync.get('/twsport-sync', async (c) => {
   await expire(db)
   const id = c.req.query('id')
   const row = id
-    ? await db.one<any>('SELECT * FROM browser_sync_jobs WHERE id = ? AND user_id = ?', [id, user.uid])
-    : await db.one<any>('SELECT * FROM browser_sync_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1', [user.uid])
+    ? await db.one<any>(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE id = ? AND user_id = ?`, [id, user.uid])
+    : await db.one<any>(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`, [user.uid])
   if (id && !row) return c.json({ error: 'not_found' }, 404)
   const extensionId = /^[a-p]{32}$/.test(c.env.TWSPORT_EXTENSION_ID || '') ? c.env.TWSPORT_EXTENSION_ID : null
   const ready = await workerReady(db)
@@ -60,7 +66,7 @@ sync.post('/twsport-sync', async (c) => {
   try { body = await boundedJson(c.req.raw) } catch { return c.json({ error: 'invalid_request' }, 400) }
   if (!body || typeof body !== 'object') return c.json({ error: 'invalid_request' }, 400)
   if (!requestId(body.client_request_id)) return c.json({ error: 'invalid_request_id' }, 400)
-  const replay = await db.one<any>('SELECT * FROM browser_sync_jobs WHERE user_id = ? AND client_request_id = ?', [user.uid, body.client_request_id])
+  const replay = await db.one<any>(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE user_id = ? AND client_request_id = ?`, [user.uid, body.client_request_id])
   if (replay) return c.json({ job: shapeSyncJob(replay), replay: true })
   const day = String(body.betting_day ?? '')
   if (![todayTpe(), addDays(todayTpe(), 1), addDays(todayTpe(), 2)].includes(day)) return c.json({ error: 'date_outside_window' }, 400)
@@ -74,24 +80,44 @@ sync.post('/twsport-sync', async (c) => {
     await db.run(`INSERT INTO browser_sync_jobs (id, user_id, client_request_id, betting_day, state, created_at, expires_at)
       VALUES (?, ?, ?, ?, 'capturing', ?, ?)`, [id, user.uid, body.client_request_id, day, now, new Date(Date.now() + 5 * 60000).toISOString()])
   } catch { return c.json({ error: 'sync_busy', message: '已有同步工作正在進行，請稍後再試' }, 409) }
-  return c.json({ job: shapeSyncJob(await db.one('SELECT * FROM browser_sync_jobs WHERE id = ?', [id])) }, 201)
+  return c.json({ job: shapeSyncJob(await db.one(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE id = ?`, [id])) }, 201)
 })
 
 sync.post('/twsport-sync/:id/capture', async (c) => {
   if (c.env.TWSPORT_SYNC_ENABLED !== 'true') return c.json({ error: 'not_enabled' }, 503)
-  const user = (await getCurrentUser(c))!, db = await getDb(c.env)
-  if (!(await schemaReady(db))) return c.json({ error: 'migration_required' }, 503)
-  await expire(db)
-  const job = await db.one<any>('SELECT * FROM browser_sync_jobs WHERE id = ? AND user_id = ?', [c.req.param('id'), user.uid])
-  if (!job) return c.json({ error: 'not_found' }, 404)
-  if (job.state !== 'capturing') return c.json({ job: shapeSyncJob(job), replay: true })
-  let payload: any
-  try { payload = validateCapture(await boundedJson(c.req.raw), job, Date.now()) }
+  const user = (await getCurrentUser(c))!
+  // Finish the bounded upload before opening a database socket. Never hold an idle socket while reading a slow body.
+  let input: any
+  try { input = await boundedJson(c.req.raw) }
   catch (e) { const code = (e as Error).message; return c.json({ error: code }, code === 'capture_too_large' ? 413 : 400) }
-  // Conditional transition also makes concurrent/retried uploads idempotent.
-  await db.run(`UPDATE browser_sync_jobs SET payload = ?, received_at = ?, state = 'queued'
-    WHERE id = ? AND user_id = ? AND state = 'capturing'`, [JSON.stringify(payload), iso(), job.id, user.uid])
-  return c.json({ job: shapeSyncJob(await db.one('SELECT * FROM browser_sync_jobs WHERE id = ?', [job.id])) }, 202)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let stage = 'schema'
+    try {
+      const db = await getDb(c.env) // A retry always gets a fresh, request-owned connection.
+      if (!(await schemaReady(db))) return c.json({ error: 'migration_required' }, 503)
+      stage = 'expire'; await expire(db)
+      stage = 'lookup'
+      const job = await db.one<any>(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE id = ? AND user_id = ?`, [c.req.param('id'), user.uid])
+      if (!job) return c.json({ error: 'not_found' }, 404)
+      // Re-read before retrying: the first write may have committed before the connection closed.
+      if (job.state !== 'capturing') return c.json({ job: shapeSyncJob(job), replay: true })
+      let payload: any
+      try { payload = validateCapture(input, job, Date.now()) }
+      catch (e) { return c.json({ error: (e as Error).message }, 400) }
+      stage = 'store'
+      await db.run(`UPDATE browser_sync_jobs SET payload = ?, received_at = ?, state = 'queued'
+        WHERE id = ? AND user_id = ? AND state = 'capturing' AND expires_at >= ?`, [JSON.stringify(payload), iso(), job.id, user.uid, iso()])
+      stage = 'receipt'
+      return c.json({ job: shapeSyncJob(await db.one(`SELECT ${JOB_COLUMNS} FROM browser_sync_jobs WHERE id = ?`, [job.id])) }, 202)
+    } catch (e) {
+      const code = transportCode(e)
+      // Fixed codes and stages only: do not log raw driver errors (query parameters / credentials).
+      console.warn(JSON.stringify({ event: 'twsport_capture_failure', stage, attempt, code: code || 'database_error' }))
+      if (!code) return c.json({ error: 'capture_store_failed' }, 500)
+      if (attempt === 1) return c.json({ error: 'capture_store_unavailable' }, 503)
+    }
+  }
+  return c.json({ error: 'capture_store_unavailable' }, 503)
 })
 
 sync.post('/twsport-sync/:id/cancel', async (c) => {

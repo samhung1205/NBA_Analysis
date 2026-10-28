@@ -33,7 +33,7 @@ function fixture() {
     const r=await target.request(path,{method,headers:{'Content-Type':'application/json',Origin:origin,...(token?{Cookie:`nba_session=${token}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})},{...env,...extraEnv});
     return {status:r.status,body:await r.json()};
   }
-  return {sql,request,mounted,create:()=>request('/twsport-sync',{client_request_id:'sync-request-001',betting_day:day})};
+  return {sql,request,mounted,env,create:()=>request('/twsport-sync',{client_request_id:'sync-request-001',betting_day:day})};
 }
 let passed=0;
 async function test(name, fn){const f=fixture();try{await fn(f);passed++;console.log(`  ✓ ${name}`)}finally{f.sql.close()}}
@@ -61,6 +61,46 @@ await test('valid capture queues once and private payload never appears in recei
  assert.equal((await f.request(`/twsport-sync/${id}/capture`,payload())).body.replay,true);
  const db=f.sql.prepare('SELECT * FROM browser_sync_jobs WHERE id=?').get(id);
  assert.equal(JSON.parse(db.payload).events[0].event.idfoevent,'sync-fixture');
+});
+function disconnectCapture(f, mode) {
+ const prepare=f.env.DB.prepare;let faults=0,writes=0;
+ f.env.DB.prepare=query=>{
+  const store=query.includes('SET payload = ?');
+  const receipt=query.includes('FROM browser_sync_jobs WHERE id = ?')&&!query.includes('AND user_id = ?');
+  const closed=()=>Object.assign(new Error('write CONNECTION_CLOSED secret-host-must-not-leak'),{code:'CONNECTION_CLOSED'});
+  const wrap=stmt=>({bind(...args){return wrap(stmt.bind(...args))},async all(){
+   if(mode==='receipt'&&receipt&&faults++===0)throw closed();
+   return stmt.all();
+  },async run(){
+   if(store){writes++;
+    if(mode==='always'||mode==='before'&&faults++===0)throw closed();
+    const result=await stmt.run();
+    if(mode==='after'&&faults++===0)throw closed();
+    return result;
+   }
+   return stmt.run();
+  }});
+  return wrap(prepare(query));
+ };
+ return ()=>writes;
+}
+await test('capture reconnects after a failed write and queues only once',async f=>{
+ const id=(await f.create()).body.job.id;const writes=disconnectCapture(f,'before');
+ const r=await f.request(`/twsport-sync/${id}/capture`,payload());
+ assert.equal(r.status,202);assert.equal(r.body.job.state,'queued');assert.equal(writes(),2);
+ assert.equal(f.sql.prepare('SELECT COUNT(*) n FROM browser_sync_jobs').get().n,1);
+});
+for(const phase of ['after','receipt'])await test(`lost ${phase} response recovers the committed receipt without another write`,async f=>{
+ const id=(await f.create()).body.job.id;const writes=disconnectCapture(f,phase);
+ const r=await f.request(`/twsport-sync/${id}/capture`,payload());
+ assert.equal(r.status,200);assert.equal(r.body.job.state,'queued');assert.equal(r.body.replay,true);assert.equal(writes(),1);
+});
+await test('persistent capture disconnect stops after one retry without leaking driver details',async f=>{
+ const id=(await f.create()).body.job.id;const writes=disconnectCapture(f,'always');
+ const r=await f.request(`/twsport-sync/${id}/capture`,payload());
+ assert.equal(r.status,503);assert.equal(r.body.error,'capture_store_unavailable');assert.equal(writes(),2);
+ assert.ok(!JSON.stringify(r).includes('secret-host'));
+ assert.equal(f.sql.prepare('SELECT state,payload FROM browser_sync_jobs').get().payload,null);
 });
 await test('other users cannot read or upload a capture',async f=>{
  const id=(await f.create()).body.job.id;

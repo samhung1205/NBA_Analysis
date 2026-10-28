@@ -8,6 +8,7 @@
 |---|---|
 | [production-runbook.md](production-runbook.md) | **正式環境操作手冊**：Railway / Cloudflare 設定、每日維運、狀態判讀、台彩 HAR 匯入、回滾 |
 | [data-source-access-2026-10-15.md](data-source-access-2026-10-15.md) | 免費 NBA 來源實測、球員 / lineup / 旅行 / 裁判邊界、台彩離線 HAR 檢查與匯入 |
+| [browser-sync-upload-fix-2026-10-28.md](browser-sync-upload-fix-2026-10-28.md) | 正式上傳 500、Postgres 斷線重連與冪等收據恢復 |
 | [browser-sync-guide.md](browser-sync-guide.md) | 免費 Chrome 同步助手：安裝、設定、資料契約與驗證；本機實作，尚未正式啟用 |
 | [twsport-api-authorization-request.md](twsport-api-authorization-request.md) | 先前 API 授權詢問稿，未寄送；使用者要求免費後不推進付費申請 |
 | [twsport-api-integration-plan.md](twsport-api-integration-plan.md) | 免費方案比較與權利邊界；保留先前付費 API 評估（不推進） |

@@ -237,7 +237,7 @@
     const txt = (board.labels?.taiwan_odds || {})[g.taiwan_odds_state] || '台彩盤口尚未取得';
     const icon = TW_ICON[g.taiwan_odds_state] || 'fa-circle-question';
     const hint = g.taiwan_odds_state === 'ingestion_unavailable'
-      ? '<div class="text-xs text-slate-400 mt-1">需手動匯入台彩盤口（步驟見<a href="/status" class="underline underline-offset-2">系統狀態</a>）。</div>' : '';
+      ? '<div class="text-xs text-slate-400 mt-1">請先按本頁上方「同步台彩盤口」。設定與 HAR 備援見<a href="/static/twsport-sync-help.html" class="underline underline-offset-2">同步助手說明</a>。</div>' : '';
     return `<div class="tw-missing"><i class="fas ${icon} mr-1.5"></i>${esc(txt)}${g.taiwan_odds_reason ? `<span class="text-slate-400">（${esc(g.taiwan_odds_reason)}）</span>` : ''}${hint}
       <div class="text-xs text-slate-400 mt-1">沒有台彩盤口就沒有可操作機會；不會以國際盤替代。</div></div>`;
   }

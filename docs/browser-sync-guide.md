@@ -2,6 +2,8 @@
 
 2026-10-28：使用者已授權正式啟用；0013 已以單一交易套用並確認 RLS／API 權限，網站與排程器已正式部署並啟用。正式入口為 `https://webapp-e3e.pages.dev`。沒有新增資料 API 訂閱費；現有雲端服務仍有用量。真實台彩讀取與全流程仍需使用者在一般桌面 Chrome 安裝助手後實測，不能以 fixture 測試代替。
 
+後續：使用者已安裝助手並嘗試真實同步，發現正式上傳 500；已確認連線中斷並修正，詳見[上傳修復紀錄](browser-sync-upload-fix-2026-10-28.md)。下方原始啟用紀錄保留當時狀態。
+
 ## 使用者只需完成這幾步
 
 1. 到 [同步助手設定頁](https://webapp-e3e.pages.dev/static/twsport-sync-help.html)下載 ZIP，解壓縮成 `NBA-Twsport-Sync` 資料夾並保留它。

@@ -43,7 +43,7 @@ export const TAIWAN_ODDS_TEXT: Record<string, string> = {
   stale: '台彩盤口過舊（超過 2 × 輪詢間隔未再確認）',
   market_closed: '台彩盤口暫停 / 關閉',
   not_yet_published: '台彩盤口尚未取得（可能尚未開盤）',
-  ingestion_unavailable: '台彩自動擷取不可用（Cloudflare 阻擋）— 需匯入 HAR',
+  ingestion_unavailable: '台彩盤口尚未成功匯入，請先同步或匯入盤口',
   not_configured: '台彩擷取尚未設定 / 從未執行',
   outside_window: '比賽超出 48 小時定價視窗',
   game_started: '比賽已開始 / 已結束',
