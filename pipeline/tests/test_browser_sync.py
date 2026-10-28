@@ -2,6 +2,8 @@
 import copy
 import json
 import uuid
+import base64
+import gzip
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
 from datetime import datetime, timedelta, timezone
@@ -49,6 +51,31 @@ def test_valid_capture_preserves_individual_times_and_all_six_markets():
     events = bs.validate_capture(p, j, NOW)
     assert events[0][0] != events[1][0]
     assert len(bs.twsport.parse_event(events[0][1], 'regular', '美國職籃').snapshots) == 6
+
+
+def compressed_inbox(payload):
+    return json.dumps({'version':bs.INBOX_VERSION,'data':base64.b64encode(gzip.compress(json.dumps(payload,ensure_ascii=False).encode())).decode()})
+
+
+def test_compressed_inbox_preserves_unicode_fields_and_each_capture_time():
+    p,j=fixture()
+    assert bs.decode_inbox(compressed_inbox(p))==p
+    assert bs.decode_inbox(json.dumps(p))==p
+    assert bs.decode_inbox(p)==p
+    assert bs.validate_capture(bs.decode_inbox(compressed_inbox(p)),j,NOW)[0][0]==NOW-timedelta(seconds=5)
+
+
+@pytest.mark.parametrize('data', ['not-valid-base64!', base64.b64encode(b'not-gzip').decode(), base64.b64encode(gzip.compress(b'{}')[:-2]).decode(),
+                                  base64.b64encode(gzip.compress(b'{}')+b'garbage').decode()])
+def test_corrupt_compressed_inbox_is_rejected(data):
+    with pytest.raises(bs.CaptureError,match='invalid_inbox_payload'):
+        bs.decode_inbox(json.dumps({'version':bs.INBOX_VERSION,'data':data}))
+
+
+def test_compressed_inbox_expansion_is_bounded():
+    envelope={'version':bs.INBOX_VERSION,'data':base64.b64encode(gzip.compress(b'x'*(bs.MAX_CAPTURE_BYTES+1))).decode()}
+    with pytest.raises(bs.CaptureError,match='capture_too_large'):
+        bs.decode_inbox(json.dumps(envelope))
 
 
 @pytest.mark.parametrize('where', ['envelope', 'event', 'market', 'selection'])
@@ -137,8 +164,12 @@ def setup_db_job(db, seeded):
     return j
 
 
-def test_real_worker_imports_six_markets_refreshes_and_clears_inbox(db, seeded, monkeypatch):
+@pytest.mark.parametrize('compressed',[False,True])
+def test_real_worker_imports_six_markets_refreshes_and_clears_inbox(db, seeded, monkeypatch, compressed):
     j=setup_db_job(db, seeded)
+    if compressed:
+        with db.cursor() as cur:
+            cur.execute('UPDATE browser_sync_jobs SET payload=%s WHERE id=%s',(compressed_inbox(j['payload']),j['id']))
     monkeypatch.setenv('TWSPORT_SYNC_ENABLED','true')
     bs.browser_sync_job(db=db)
     with db.cursor() as cur:

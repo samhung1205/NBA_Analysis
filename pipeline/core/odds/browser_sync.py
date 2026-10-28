@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import os
 import math
+import base64
+import zlib
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -16,12 +18,42 @@ from ..timeutil import ensure_utc, now_utc, parse_utc, tpe_date
 from . import twsport
 
 VERSION = 'twsport-browser-v1'
+INBOX_VERSION = 'twsport-inbox-gzip-v1'
+MAX_CAPTURE_BYTES = 2 * 1024 * 1024
+MAX_INBOX_BYTES = 48 * 1024
 SCHEMA = json.loads(Path(__file__).with_name('browser_schema.json').read_text())
 HEARTBEAT = dict(source_key='browser_sync', display_name='Chrome 盤口匯入處理器', category='odds', expected_interval_min=1)
 
 
 class CaptureError(ValueError):
     pass
+
+
+def decode_inbox(raw):
+    """Read both legacy JSON and a bounded gzip envelope; no unbounded decompression."""
+    try:
+        if isinstance(raw, str):
+            if len(raw.encode('utf-8')) > MAX_CAPTURE_BYTES:
+                raise CaptureError('capture_too_large')
+            raw = json.loads(raw)
+        if not isinstance(raw, dict) or raw.get('version') != INBOX_VERSION:
+            return raw
+        _only(raw, ['version', 'data'])
+        data = raw.get('data')
+        if not isinstance(data, str) or len(data) > MAX_INBOX_BYTES:
+            raise CaptureError('invalid_inbox_payload')
+        compressed = base64.b64decode(data, validate=True)
+        decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        decoded = decoder.decompress(compressed, MAX_CAPTURE_BYTES + 1)
+        if len(decoded) > MAX_CAPTURE_BYTES:
+            raise CaptureError('capture_too_large')
+        if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+            raise CaptureError('invalid_inbox_payload')
+        return json.loads(decoded.decode('utf-8'))
+    except CaptureError:
+        raise
+    except (ValueError, TypeError, UnicodeError, zlib.error):
+        raise CaptureError('invalid_inbox_payload') from None
 
 
 def _only(value, fields):
@@ -85,7 +117,7 @@ def validate_capture(payload: dict, job: dict, now: datetime) -> list[tuple[date
 def import_capture(job, *, now=None, db=None, run=None, refresh=None, clock=now_utc):
     from .ingest import run_odds_job
     now = ensure_utc(now or clock())
-    payload = json.loads(job['payload']) if isinstance(job['payload'], str) else job['payload']
+    payload = decode_inbox(job['payload'])
     events = validate_capture(payload, job, now)
     run = run or run_odds_job
     summary = dict(games=0, markets=0, new=0, unchanged=0, stale=0, rejected=0, capture_times=[], run_ids=[],
