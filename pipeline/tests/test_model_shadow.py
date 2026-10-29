@@ -94,6 +94,24 @@ def test_disabled_job_does_not_open_database(monkeypatch):
     assert shadow.scheduled()["status"] == "DISABLED"
 
 
+def test_unchanged_results_need_bounded_database_reads_as_ledger_grows():
+    tip = NOW-timedelta(days=1)
+    game = dict(game_id=1,date_utc=tip,status='final',home_pts=110,away_pts=100,home_h1=55,away_h1=50)
+    rows = [{**game,'id':str(i),'scheduled_tipoff':tip,'previous_payload':shadow.dumps(game)} for i in range(1000)]
+    class Cursor:
+        calls = 0
+        def execute(self, sql, args=None):
+            self.calls += 1
+            assert self.calls <= 2, 'unchanged results must not require per-game database round trips'
+        def fetchone(self):
+            return {'now':NOW}
+        def fetchall(self):
+            return rows
+    cur = Cursor()
+    assert shadow._observe_results(cur) == 0
+    assert cur.calls == 2
+
+
 def seed_prediction(db, teams, tip):
     with db.cursor() as cur:
         cur.execute("""INSERT INTO games (nba_game_id,season,season_stage,date_utc,status,home_team_id,away_team_id)

@@ -124,13 +124,17 @@ def _pairs(cur, as_of):
 
 
 def _observe_results(cur):
+    now = _clock(cur)
     cur.execute("""SELECT p.id,p.scheduled_tipoff,g.id AS game_id,g.date_utc,g.status,g.home_pts,g.away_pts,
-        g.home_h1,g.away_h1 FROM model_shadow_predictions p JOIN games g ON g.id=p.game_id
+        g.home_h1,g.away_h1,previous.payload AS previous_payload
+        FROM model_shadow_predictions p JOIN games g ON g.id=p.game_id
+        LEFT JOIN LATERAL (SELECT payload FROM model_shadow_results WHERE shadow_prediction_id=p.id
+            ORDER BY observed_at DESC,id DESC LIMIT 1) previous ON true
         WHERE p.experiment_version=%s AND (g.status='final' OR g.date_utc<>p.scheduled_tipoff
-          OR EXISTS (SELECT 1 FROM model_shadow_results r WHERE r.shadow_prediction_id=p.id))""", (VERSION,))
+          OR previous.payload IS NOT NULL)""", (VERSION,))
     n = 0
     for row in cur.fetchall():
-        if row["status"] == "final" and row["date_utc"] >= _clock(cur):
+        if row["status"] == "final" and row["date_utc"] >= now:
             continue
         result = {k: row[k] for k in ("game_id", "date_utc", "status", "home_pts", "away_pts", "home_h1", "away_h1")}
         if row["date_utc"] != row["scheduled_tipoff"]:
@@ -138,9 +142,7 @@ def _observe_results(cur):
         elif row["status"] == "final" and (not all(_finite(row[k]) for k in ("home_pts", "away_pts")) or row["home_pts"] == row["away_pts"]):
             result["status"] = "ungradable_scores"
         body = dumps(result)
-        cur.execute("SELECT payload FROM model_shadow_results WHERE shadow_prediction_id=%s ORDER BY observed_at DESC,id DESC LIMIT 1", (row["id"],))
-        previous = cur.fetchone()
-        if previous is None or previous["payload"] != body:
+        if row["previous_payload"] != body:
             cur.execute("INSERT INTO model_shadow_results VALUES (%s,%s,clock_timestamp(),%s)", (str(uuid4()), row["id"], body))
             n += 1
     return n

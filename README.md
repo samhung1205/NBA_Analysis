@@ -48,7 +48,7 @@
  NBA CDN / ESPN / 官方傷病 PDF ─┐
  台彩 Chrome 同步 / HAR 備援 / The Odds API ─┤
                                  ▼
-          Railway 排程器（Python，19 個 jobs，24 小時常駐）
+          Railway 排程器（Python，21 個 jobs，24 小時常駐）
           擷取 → 特徵 → 預測 → 定價 → 注碼 → paper → 決策物化 → 推播
                                  │ 讀寫
                                  ▼
@@ -151,7 +151,7 @@
 - **模型回測績效**：歷史準確率、ATS、大小分、上半場命中率、Log Loss / Brier。
 - **個人實際投注損益**：以你記錄的台彩實際賠率計算的損益曲線。
 
-2026-10-29 已完成本機的「本季實際預測」與獨立影子實驗區塊，需套用 0014 並部署後才會在線上顯示。影子校正不改正式模型或風控；啟用方式與驗證邊界見 [影子實驗說明](docs/model-shadow-2026-10-29.md)。近期 68 場檢查見 [模型檢查報告](docs/model-review-2026-10-29.md)。
+2026-10-29 已正式啟用「本季實際預測」與獨立影子實驗區塊；0014、網站與 Railway 均已部署，影子收集於台灣 17:28 開始。影子校正不改正式模型或風控；規則、部署證據與驗證邊界見 [影子實驗說明](docs/model-shadow-2026-10-29.md)。近期 68 場檢查見 [模型檢查報告](docs/model-review-2026-10-29.md)。
 
 ### 4.8 系統狀態 `/status`
 
@@ -369,7 +369,7 @@ Pipeline（`cd pipeline`，以 `.venv/bin/python` 執行）：
 │   ├── core/execution/   paper strategy、結算
 │   ├── core/decision/    決策中心、實際下注 exposure、bankroll
 │   ├── core/notify/      Telegram 推播（Phase E.1）
-│   ├── core/scheduling.py  19 個排程 job 定義
+│   ├── core/scheduling.py  21 個排程 job 定義
 │   ├── scheduler.py      排程器入口
 │   └── run_*.py          各項手動指令
 ├── migrations/postgres/  正式 schema（0001–0011，權威版）

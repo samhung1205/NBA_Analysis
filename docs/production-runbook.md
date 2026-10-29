@@ -5,7 +5,7 @@ Cloudflare Pages ⇄ Supabase Postgres ⇄ Railway scheduler. Phase D.1–D.5 ar
 ```
  Cloudflare Pages (Hono web + API + auth)  ──reads/writes──▶  Supabase Postgres (Session pooler, port 5432)
                                                                       ▲
- Railway "nba-scheduler" (Python, 19 jobs, always on, game-aware — §4b) ────────────────┘
+ Railway "nba-scheduler" (Python, 21 jobs, always on, game-aware — §4b) ────────────────┘
    └─ Volume /data/model-artifacts  (production ML artifact, survives redeploys)
  The Odds API (international odds — diagnostic only)     Taiwan Sports Lottery (actionable — user-initiated Chrome sync / HAR fallback)
 ```
@@ -56,7 +56,7 @@ First boot logs (Deploy logs):
 [entrypoint] MODEL_ARTIFACT_DIR=/data/model-artifacts
 [entrypoint] No persistent production artifact found; bootstrapping...
 [entrypoint] Bootstrap artifact copied.
-... 已登錄 job：<id> — ...     (19 lines)
+... 已登錄 job：<id> — ...     (21 lines)
 ```
 
 Registered jobs (from `core/scheduling.py`): `daily_schedule_scores`, `live_final_refresh`, `injuries_peak`, `injuries_offpeak`, `predict_early`, `predict_final`, `predict_injury_refresh`, `weekly_retrain`, `odds_twsport`, `odds_oddsapi`, `market_pricing` (pricing + sizing), `paper_strategy`, `decision_board`, `notify_actionable`, `notify_daily_summary`, `notify_system_alerts` (the three notify jobs return immediately unless Telegram is configured), `referee_assignments` (§4d), `roster_sync`, `browser_sync` (§4e).
@@ -299,8 +299,8 @@ cd pipeline
 
 All of these are read-only, never call The Odds API, and never print secrets.
 
-Recent model evaluation: [2026-10-29 review](model-review-2026-10-29.md). The monitor selects observed pregame records and reports early / T-60 performance separately; it does not publish metrics to the website, recalibrate production, or treat unavailable Taiwan paper ROI as zero.
+Recent model evaluation: [2026-10-29 review](model-review-2026-10-29.md). The read-only CLI selects observed pregame records and reports early / T-60 performance separately. The separate materializer below publishes aggregates to the website; neither recalibrates production or treats unavailable Taiwan paper ROI as zero.
 
-### Pending activation: independent adaptive shadow / website model reports (2026-10-29)
+### Enabled: independent adaptive shadow / website model reports (2026-10-29)
 
-Local implementation and isolated validation are complete; **0014 has not been applied to production and this version has not been deployed**. See [activation and frozen experiment rules](model-shadow-2026-10-29.md). Once deployed, two independent jobs bring the source-defined total to 21: `model_shadow` (every minute at :20, default disabled) and `model_monitor` (:14/:44, waits if the new schema is absent). `MODEL_SHADOW_ENABLED=true` activates a new, prospective-only experiment; `MODEL_MONITOR_ENABLED=true` materializes aggregate reports. Existing production inference, weekly retraining, pricing, sizing and actual bet settlement keep their current rules. Disable the shadow flag to stop collecting; retain its ledger. There is no automatic promotion.
+**0014 was applied at 17:25 TPE and the independent experiment activated at 17:28 TPE, with explicit user authorization.** The website and Railway deployment succeeded; both new heartbeats are healthy and the live performance page shows the experiment collecting. See [deployment evidence and frozen experiment rules](model-shadow-2026-10-29.md). Two independent jobs bring the total to 21: `model_shadow` (every minute at :20, enabled in production) and `model_monitor` (:14/:44). Production has `MODEL_SHADOW_ENABLED=true` and `MODEL_MONITOR_ENABLED=true`. Existing production inference, weekly retraining, pricing, sizing and actual bet settlement keep their current rules. Disable the shadow flag to stop collecting; retain its ledger. There is no automatic promotion.
