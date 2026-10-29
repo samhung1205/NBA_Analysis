@@ -83,7 +83,10 @@ def test_trigger_search_paths_are_fixed_and_not_publicly_executable(db):
                        JOIN pg_namespace n ON n.oid=p.pronamespace
                        WHERE n.nspname=current_schema()""")
         rows = cur.fetchall()
-        assert len(rows) == 6
+        assert {r["proname"] for r in rows} == {
+            'd5_immutable', 'bets_guard', 'bankroll_account_guard', 'decision_snapshot_guard',
+            'paper_ledger_immutable', 'paper_bet_settlement_guard', 'protect_model_shadow_ledger',
+        }
         for row in rows:
             assert "search_path=pg_catalog" in row["proconfig"]
             assert not any(acl.startswith("=X/") for acl in row["proacl"])

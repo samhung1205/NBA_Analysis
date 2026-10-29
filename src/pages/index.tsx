@@ -204,9 +204,11 @@ pages.get('/performance', (c) => {
           <i class="fas fa-chart-line text-orange-400 mr-1.5"></i>回測 / 績效
         </h1>
         <p class="text-xs text-slate-400 mb-5">
-          模型歷史準確率、ATS 與你的實際投注損益。
+          本季實際預測、獨立影子實驗、歷史回測與你的實際投注損益。
           <span class="text-amber-300/90">實際投注損益以你記錄的台彩實際賠率計算；模型回測沒有歷史台彩盤口時，ROI 顯示「無證據」（不是 0，也不是獲利證明）。</span>
         </p>
+
+        <div id="model-observability-root" class="mb-8" aria-live="polite"></div>
 
         <h2 class="text-sm font-semibold text-slate-300 mb-3">
           <i class="fas fa-robot mr-1.5 text-slate-400"></i>模型回測績效

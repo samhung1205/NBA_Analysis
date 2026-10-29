@@ -522,6 +522,18 @@ api.get('/metrics', async (c) => {
   return c.json({ metrics: rows })
 })
 
+api.get('/metrics/prospective', async (c) => {
+  c.header('Cache-Control', 'no-store')
+  const rows = await q.getModelEvaluationReports(await requestDb(c))
+  const reports = rows.map((row) => {
+    const report = parseJson(row.payload)
+    const generated = new Date(row.generated_at).getTime()
+    return { key: row.report_key, generated_at: row.generated_at, report,
+      stale: !report || !Number.isFinite(generated) || generated > Date.now() || Date.now() - generated > 90 * 60000 }
+  })
+  return c.json({ status: reports.length ? 'available' : 'waiting', reports })
+})
+
 api.get('/teams', async (c) => {
   const db = await requestDb(c)
   return c.json({ teams: await q.getAllTeams(db) })

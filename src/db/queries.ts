@@ -296,6 +296,17 @@ export async function getModelMetrics(db: Db) {
   )
 }
 
+export async function getModelEvaluationReports(db: Db) {
+  try {
+    return await db.all<any>(`SELECT report_key, generated_at, payload FROM model_evaluation_reports
+      WHERE report_key IN ('prospective-model-v1', 'adaptive-shadow-v1') ORDER BY report_key`)
+  } catch (error: any) {
+    // Deploy-safe: missing migration is waiting; an actual DB outage must remain an error.
+    if (error?.code === '42P01' || /no such table: (?:main\.)?model_evaluation_reports/i.test(error?.message || '')) return []
+    throw error
+  }
+}
+
 export async function getAllTeams(db: Db) {
   return db.all<any>(`SELECT * FROM teams ORDER BY conference, division, abbr`)
 }

@@ -171,7 +171,7 @@ def test_scheduled_wiring_and_frozen_triggers():
     assert specs["injuries_peak"].func.__name__ == "injury_poll_job" == specs["injuries_offpeak"].func.__name__
     assert str(specs["odds_oddsapi"].trigger).startswith("cron[") and "minute='40'" in str(specs["odds_oddsapi"].trigger)
     assert "hour='12'" in str(specs["daily_schedule_scores"].trigger)
-    assert len(specs) == 19          # previous 18 + explicitly enabled browser capture consumer
+    assert len(specs) == 21          # previous 19 + independent shadow collector / model report materializer
 
 
 # ------------------------------------------------------------------ #

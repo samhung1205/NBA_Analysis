@@ -52,6 +52,8 @@ def job_specs() -> list[JobSpec]:
     from .jobs.daily import fetch_schedule_and_scores_job, injury_poll_job, refresh_live_and_final_job
     from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
     from .production.retrain import retrain_job
+    from .production.shadow import scheduled as shadow_scheduled
+    from .production.observability import scheduled as model_monitor_scheduled
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
     from .sizing.job import pricing_and_sizing_scheduled
     from .execution.ledger import paper_strategy_scheduled
@@ -64,6 +66,10 @@ def job_specs() -> list[JobSpec]:
     from .config import settings
 
     return [
+        JobSpec("model_shadow", shadow_scheduled, CronTrigger(minute="*", second=20, timezone=TPE),
+                "獨立影子實驗：每分鐘擷取 T-75~T-60 配對並觀測賽果；須 MODEL_SHADOW_ENABLED=true，不接入正式定價", startup_catchup=False),
+        JobSpec("model_monitor", model_monitor_scheduled, CronTrigger(minute="14,44", timezone=TPE),
+                "每 30 分鐘：Python 物化最近 14 天前瞻模型與獨立影子實驗績效"),
         JobSpec("browser_sync", browser_sync_job, IntervalTrigger(seconds=15, timezone=TPE),
                 "每 15 秒：處理使用者明確送出的 Chrome 盤口（未啟用即返回；不抓外部來源）", startup_catchup=False),
         JobSpec("daily_schedule_scores", fetch_schedule_and_scores_job,

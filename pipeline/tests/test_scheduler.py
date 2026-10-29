@@ -100,6 +100,15 @@ def test_live_refresh_is_a_5_minute_interval():
     assert trig.get_next_fire_time(prev, prev + timedelta(seconds=1)) == prev + timedelta(minutes=5)
 
 
+def test_shadow_and_monitor_are_separate_from_production_retrain():
+    specs = {s.id: s for s in job_specs()}
+    assert specs['model_shadow'].startup_catchup is False
+    now = utc(2026, 10, 29, 8, 0, 1)
+    runs = next_run_times(list(specs.values()), now)
+    assert runs['model_shadow'] == datetime(2026, 10, 29, 16, 0, 20, tzinfo=TPE)
+    assert runs['model_monitor'] == datetime(2026, 10, 29, 16, 14, tzinfo=TPE)
+
+
 def test_guarded_swallows_exceptions():
     from core.scheduling import guarded
 

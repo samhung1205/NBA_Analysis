@@ -292,8 +292,15 @@ cd pipeline
 .venv/bin/python run_production_check.py --post-deploy   # after deploy: critical stale heartbeats = FAIL
 .venv/bin/python run_production_check.py --json          # machine readable
 .venv/bin/python run_data_audit.py                       # KEEP / REVIEW / SAFE TO REMOVE
+.venv/bin/python run_model_monitor.py --days 14 --output artifacts/model-monitor-latest.json  # 實際賽前預測評估；不重訓、不寫 DB
 .venv/bin/python scheduler.py --print-next-runs          # next trigger per job
 .venv/bin/python run_notify.py --job system --dry-run     # Telegram alert that would be sent now (no send / write)
 ```
 
 All of these are read-only, never call The Odds API, and never print secrets.
+
+Recent model evaluation: [2026-10-29 review](model-review-2026-10-29.md). The monitor selects observed pregame records and reports early / T-60 performance separately; it does not publish metrics to the website, recalibrate production, or treat unavailable Taiwan paper ROI as zero.
+
+### Pending activation: independent adaptive shadow / website model reports (2026-10-29)
+
+Local implementation and isolated validation are complete; **0014 has not been applied to production and this version has not been deployed**. See [activation and frozen experiment rules](model-shadow-2026-10-29.md). Once deployed, two independent jobs bring the source-defined total to 21: `model_shadow` (every minute at :20, default disabled) and `model_monitor` (:14/:44, waits if the new schema is absent). `MODEL_SHADOW_ENABLED=true` activates a new, prospective-only experiment; `MODEL_MONITOR_ENABLED=true` materializes aggregate reports. Existing production inference, weekly retraining, pricing, sizing and actual bet settlement keep their current rules. Disable the shadow flag to stop collecting; retain its ledger. There is no automatic promotion.
