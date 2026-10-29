@@ -27,7 +27,7 @@ model / distribution decisions (C.5E) · `risk-v1` (1/4 Kelly, 2 % single bet, 3
 | Restart policy | Always (a crash must not leave the scheduler down) |
 | Volume | create one, mount path **`/data/model-artifacts`** |
 | Healthcheck | none (no HTTP port) |
-| Usage | Settings → Usage: set a usage limit / alert. Hobby has no documented hard spend cap: watch it the first week, and the first Monday retrain (memory peak) |
+| Usage | Workspace → Usage: set an email alert / Compute hard limit. The limit is shared by every project in the workspace; reaching it takes all workloads offline. Monitor service RAM, including Monday retraining peaks. [Cost control](https://docs.railway.com/pricing/cost-control) |
 
 Variables (names only — enter values in the Railway UI). Everything the Python code reads:
 
@@ -163,6 +163,23 @@ APScheduler still wakes every 15 / 30 min; the function decides. Cadence uses `d
 **Reading the logs:** `[scheduler-efficiency] <job> skipped: <reason>` — reasons `idle_no_upcoming_game`, `outside_injury_window`, `cadence_not_due`, `no_game_in_window`, `no_odds_snapshots`, `no_fresh_inputs`, `no_candidate_or_open_bet`, `idle`, `no_new_training_data`. INFO is logged when the reason changes and at most hourly otherwise (with an `xN since last log` count); the rest is DEBUG. `run_production_check.py` shows next eligible game, hours to it, injury tier, and whether pricing / paper / decision / retrain are active or idle. No dollar estimate: read Railway → Metrics after ~24 h.
 
 Rollback of the policy: `git revert <scheduler-efficiency commit>` and redeploy (restores the previous every-tick behavior; no data migration involved).
+
+### 4b.1. 常駐 RAM：傷病 JVM / 重訓工作隔離（2026-10-30）
+
+`core/job_process.py` 將兩個大型工作交給使用同一 Python 執行檔與環境的獨立行程；工作結束後由 OS 回收 JVM、Python heap 與原生套件配置。排程器持續執行，每分鐘決策／推播與每 15 秒 browser sync 的觸發時間沿用。
+
+- 傷病：原本的 `injury_poll_job` 在父行程完成 next-game／cadence gate；只有真的需要抓取時才啟動子行程執行既有 `fetch_injuries_job`。傳遞原本的 UTC `now` 與 expected interval，ET 報告探測、解析、交易、冪等與心跳均沿用。JVM 不會被載入排程器。
+- 重訓：子行程執行既有 `retrain_job`，保留無新資料略過、固定模型規格、artifact 檔案鎖、gates、原子寫入與 promotion 規則。排程註冊時不再 import 重訓模組。
+- 子行程以 `sys.executable` 啟動，不經 shell、不緩衝 stdout/stderr；繼承 Railway 的環境變數及 `MODEL_ARTIFACT_DIR`，自己建立／關閉 DB pool，不共享父行程的 DB connection。沒有新增依賴或 migration。
+- 傷病工作上限 10 分鐘、重訓上限 60 分鐘；超時會終止並回收子行程。非零退出／超時會由父行程記錄 `error` 心跳並報錯，不會退回父行程執行。檢查 `worker_failed` / `worker_timeout`，確認來源與執行時間後再調整上限。
+
+Railway logs 的 `[memory-worker]` 會記錄工作前後的 **parent_rss_mib**、elapsed 秒數，以及子行程退出時的 **peak_rss_mib**。兩者分別是當下 RSS 與整個子行程生命週期峰值，不可混為一談。Linux 使用 `/proc/self/statm` 讀 RSS；無法讀取時顯示 `None`，不影響工作。
+
+本機離線對照（macOS，僅初始化 JVM 並配置 128 MiB Java 測試陣列，**沒有抓真實 PDF、連 DB 或重訓模型**）：原行程完成後 RSS 164.8 → 408.6 MiB，JVM 留在排程器；隔離工作完成後 RSS 165.1 → 165.1 MiB，排程器未載入 JVM。這證明隔離能回收該工作配置，**不代表正式 RAM 或帳單會降低相同比例**。Python／NumPy 等其他排程仍常駐，這一版沒有改模型或降低資料時效。
+
+驗證：`cd pipeline && DATABASE_URL=postgresql://invalid:invalid@127.0.0.1:1/none PYTHON_DOTENV_DISABLED=1 .venv/bin/python -m pytest -m 'not db' -q` → **707 passed、174 deselected**；`tests/test_job_process_db.py tests/test_injuries.py tests/test_scheduler_efficiency.py -m db` → **19 passed、46 deselected**。真實子行程只連隨機測試 schema，HTTP/PDF 來源以合成資料替代；確認 UTC、冪等、心跳、無新資料 gate 與 artifact 未變。另驗證非零退出／超時後行程已回收並記錄錯誤，語法與 diff 檢查通過。
+
+部署後以相同比賽時段觀察 24–48 小時：RAM 基線在傷病工作完成後應回落、子行程應正常退出、`nbainjuries` / `model_retrain` 與 `decision_board` 心跳持續健康。獨立工作會增加重新載入套件的 CPU 成本，須同時比較總用量；每週重訓的正式高峰仍需等下一次週一工作確認。尚未部署前不能宣稱線上節費。
 
 ## 4c. Telegram push (`notify-v1`, Phase E.1, optional)
 

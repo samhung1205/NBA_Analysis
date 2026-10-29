@@ -49,9 +49,9 @@ def guarded(fn: Callable) -> Callable:
 
 def job_specs() -> list[JobSpec]:
     # 延遲 import：純排程時間測試不需要載入資料層
-    from .jobs.daily import fetch_schedule_and_scores_job, injury_poll_job, refresh_live_and_final_job
+    from .jobs.daily import fetch_schedule_and_scores_job, refresh_live_and_final_job
+    from .job_process import injury_poll_job, retrain_job
     from .production.predict import early_prediction_job, final_prediction_job, injury_refresh_job
-    from .production.retrain import retrain_job
     from .production.shadow import scheduled as shadow_scheduled
     from .production.observability import scheduled as model_monitor_scheduled
     from .odds.ingest import oddsapi_odds_job, twsport_odds_job
