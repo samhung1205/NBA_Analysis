@@ -191,7 +191,11 @@ def predict_upcoming_games_job(kind: str = "early", now: datetime | None = None,
             if kind == "early" and not dry_run:          # 每日一次的存活心跳（休賽期也看得到排程有在跑）
                 heartbeat(cur, status="ok", records_updated=0, **HEARTBEAT)
             return rep
-        history: HistoryInputs = load_history(cur, now)
+        # Only scheduled live predictions reuse box-score inputs. Every call
+        # validates actual DB content/as-of; research and retraining stay direct.
+        cache_dir = (art_mod.artifact_root(root) / ".runtime-cache" / "history"
+                     if not dry_run and game_ids is None else None)
+        history: HistoryInputs = load_history(cur, now, cache_dir=cache_dir)
         pending = load_pending(cur, now, max(g.game_time_utc for g in cands))
     try:
         preds, skipped = predict_games(art, history, cands, pending, now, kind=kind)

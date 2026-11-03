@@ -5,6 +5,7 @@ __pycache__/
 *.pyc
 logs/
 .pytest_cache/
+**/.runtime-cache/
 
 # 訓練 / 評估用的大型檔案不進映像（只保留 production bootstrap artifact）
 artifacts/*

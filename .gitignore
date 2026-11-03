@@ -62,6 +62,7 @@ pipeline/artifacts/*
 
 # Runtime lock is machine-specific
 pipeline/artifacts/production/.lock
+**/.runtime-cache/
 
 # Taiwan Sports Lottery HAR captures may contain cookies / tokens — never commit
 *.har

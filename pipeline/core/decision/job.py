@@ -195,19 +195,14 @@ def load_day_inputs(cur, day: date, now: datetime) -> dict[str, Any]:
     ids = [g["id"] for g in games]
     if not ids:
         return {"games": [], "odds": [], "preds": [], "pricing": [], "sizing": []}
-    cur.execute("SELECT * FROM odds_snapshots WHERE game_id = ANY(%s) AND fetched_at <= %s ORDER BY id", (ids, now))
-    odds = cur.fetchall()
-    cur.execute("""SELECT id, game_id, model_version, created_at, home_win_prob, pred_margin, pred_total,
-                          pred_home_h1, pred_away_h1, features_json
-                     FROM predictions WHERE game_id = ANY(%s) AND created_at <= %s ORDER BY id""", (ids, now))
-    preds = cur.fetchall()
-    cur.execute("SELECT * FROM market_pricing_snapshots WHERE game_id = ANY(%s) AND analysis_as_of <= %s ORDER BY id",
-                (ids, now))
-    pricing = cur.fetchall()
-    cur.execute("""SELECT id, market_pricing_snapshot_id, analysis_as_of FROM bet_sizing_snapshots
-                    WHERE game_id = ANY(%s) AND risk_policy_version = %s AND analysis_as_of <= %s""",
-                (ids, P.RISK_POLICY.version, now))
-    return {"games": games, "odds": odds, "preds": preds, "pricing": pricing, "sizing": cur.fetchall()}
+    from ..pricing.queries import (load_latest_odds, load_predictions, load_relevant_pricings,
+                                   load_sizing_references)
+
+    odds = load_latest_odds(cur, ids, now)
+    preds = load_predictions(cur, ids, now)
+    pricing = load_relevant_pricings(cur, ids, odds, preds, now)
+    sizing = load_sizing_references(cur, [r["id"] for r in pricing], P.RISK_POLICY.version, now)
+    return {"games": games, "odds": odds, "preds": preds, "pricing": pricing, "sizing": sizing}
 
 
 def load_paper(cur, day: date) -> dict[int, dict] | None:

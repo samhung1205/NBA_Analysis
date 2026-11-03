@@ -121,6 +121,10 @@ cd pipeline
 
 套用檔案 SHA-256：`34e2402143e7e37566f8ba7f212e9780799e6d3758128f61e3bc4b6eb397bc6e`。尚未驗證 HTTP Data API 與 Dashboard Advisor；本機未設定正式網站 URL，未執行網站 HTTP smoke。Postgres 權限修正已實測生效，但不能據此判定修正前是否曾有資料外洩。
 
+### 3b. Supabase 額度限制（2026-11-03）
+
+Data API 402 若伴隨組織 Egress Exceeded，先查組織 Usage 及各專案占比；直接 SQL 可能仍可使用，不能假設背景讀取已停止。Egress 包含 Session pooler 回應，與 Railway RAM 是不同額度。完整診斷、本機節流修正、驗證／部署狀態及維持免費的恢復限制見 [本次紀錄](supabase-egress-2026-11-03.md)。不要為解限停用 RLS、刪稽核資料或自動升級。
+
 ## 4. Daily operations
 
 - Look at `python run_production_check.py` (or the website status page) once a day.

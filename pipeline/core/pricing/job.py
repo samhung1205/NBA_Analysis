@@ -60,14 +60,9 @@ def schema_ready(cur) -> bool:
 
 def load_rows(cur, game_ids: list[int], as_of: datetime) -> tuple[list[dict], list[dict]]:
     """SQL 先以 as_of 過濾（之後的列根本不讀進來），alignment 再做一次（純函式、有測試）。"""
-    cur.execute("SELECT * FROM odds_snapshots WHERE game_id = ANY(%s) AND fetched_at <= %s ORDER BY id",
-                (game_ids, as_of))
-    odds = cur.fetchall()
-    cur.execute("""SELECT id, game_id, model_version, created_at, home_win_prob, pred_margin, pred_total,
-                          pred_home_h1, pred_away_h1, features_json
-                     FROM predictions WHERE game_id = ANY(%s) AND created_at <= %s ORDER BY id""",
-                (game_ids, as_of))
-    return odds, cur.fetchall()
+    from .queries import load_latest_odds, load_predictions
+
+    return load_latest_odds(cur, game_ids, as_of), load_predictions(cur, game_ids, as_of)
 
 
 def _db_value(k: str, v: Any) -> Any:

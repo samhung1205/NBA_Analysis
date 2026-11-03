@@ -158,15 +158,11 @@ def load_inputs(cur, now: datetime, horizon: timedelta) -> tuple[list[dict], lis
     ids = [g["id"] for g in games]
     if not ids:
         return [], [], [], []
-    cur.execute("SELECT * FROM odds_snapshots WHERE game_id = ANY(%s) AND fetched_at <= %s ORDER BY id", (ids, now))
-    odds = cur.fetchall()
-    cur.execute("""SELECT id, game_id, model_version, created_at, home_win_prob, pred_margin, pred_total,
-                          pred_home_h1, pred_away_h1, features_json
-                     FROM predictions WHERE game_id = ANY(%s) AND created_at <= %s ORDER BY id""", (ids, now))
-    preds = cur.fetchall()
-    cur.execute("SELECT * FROM market_pricing_snapshots WHERE game_id = ANY(%s) AND analysis_as_of <= %s ORDER BY id",
-                (ids, now))
-    return games, odds, preds, cur.fetchall()
+    from ..pricing.queries import load_latest_odds, load_predictions, load_relevant_pricings
+
+    odds = load_latest_odds(cur, ids, now)
+    preds = load_predictions(cur, ids, now)
+    return games, odds, preds, load_relevant_pricings(cur, ids, odds, preds, now)
 
 
 def _db_value(k: str, v: Any) -> Any:

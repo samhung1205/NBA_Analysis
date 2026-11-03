@@ -21,8 +21,7 @@ from .features import HISTORY_STAGES, HistoryInputs, ScheduledGame
 INJURY_LOOKBACK = timedelta(days=5)        # ≥ injury_asof.LOOKBACK_DAYS（4 天）
 
 
-def load_history(cur, as_of: datetime, *, injury_since: datetime | None = None, full_injuries: bool = False
-                 ) -> HistoryInputs:
+def _load_history_base(cur, as_of: datetime):
     as_of = ensure_utc(as_of)
     cur.execute(
         """
@@ -51,12 +50,24 @@ def load_history(cur, as_of: datetime, *, injury_since: datetime | None = None, 
     for r in cur.fetchall():
         players[r["game_id"]].append((r["team_id"], r["player_id"], float(r["min"] or 0.0), bool(r["started"]),
                                       float(r["plus_minus"] or 0.0)))
+    return games, stages, derived, dict(players)
+
+
+def load_history(cur, as_of: datetime, *, injury_since: datetime | None = None, full_injuries: bool = False,
+                 cache_dir=None) -> HistoryInputs:
+    as_of = ensure_utc(as_of)
+    if cache_dir is not None and not full_injuries:
+        from .history_cache import load_base
+
+        games, stages, derived, players = load_base(cur, as_of, cache_dir, _load_history_base)
+    else:
+        games, stages, derived, players = _load_history_base(cur, as_of)
     if full_injuries:
         index = load_index(cur)
     else:
         index = load_index(cur, since=injury_since or (as_of - INJURY_LOOKBACK))
     index = InjuryIndex([s for s in index.snapshots if s.report_time_utc < as_of])
-    return HistoryInputs(games, stages, derived, dict(players), index, as_of)
+    return HistoryInputs(games, stages, derived, players, index, as_of)
 
 
 def _scheduled(rows) -> list[ScheduledGame]:
