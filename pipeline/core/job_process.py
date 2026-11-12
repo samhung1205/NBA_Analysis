@@ -1,8 +1,8 @@
-"""Run the JVM / training work in disposable interpreters, never in the scheduler.
+"""Run injury fetching, training and scheduled inference in disposable interpreters.
 
-Only the two fixed jobs below are accepted. Business logic, database credentials,
+Only the fixed jobs below are accepted. Business logic, database credentials,
 artifact paths and Python version are inherited; no shell, pickle or job output
-is buffered by the parent. The injury cadence gate stays in the parent.
+is buffered by the parent. Cheap eligibility checks stay in the scheduler.
 """
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ import subprocess
 import sys
 import time
 
+from .production.predict import HEARTBEAT as PREDICTION_HEARTBEAT
+
 log = logging.getLogger(__name__)
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 JOBS = {
@@ -24,6 +26,7 @@ JOBS = {
                  {"source_key": "nbainjuries", "display_name": "NBA 官方傷病報告", "category": "injury"}),
     "retrain": ("core.production.retrain", "retrain_job", 3600,
                 {"source_key": "model_retrain", "display_name": "模型重訓（ml-v2.0）", "category": "model"}),
+    "predict": ("core.production.predict", "predict_upcoming_games_job", 600, PREDICTION_HEARTBEAT),
 }
 
 
@@ -48,9 +51,11 @@ def _command(job: str) -> list[str]:
 def _record_failure(job: str, reason: str, kwargs: dict) -> None:
     from .db import cursor, heartbeat
 
-    interval = kwargs.get("expected_interval_min", 30) if job == "injuries" else 7 * 24 * 60
+    meta = dict(JOBS[job][3])
+    if job != "predict":
+        meta["expected_interval_min"] = kwargs.get("expected_interval_min", 30) if job == "injuries" else 7 * 24 * 60
     with cursor() as cur:
-        heartbeat(cur, status="error", error=reason, expected_interval_min=interval, **JOBS[job][3])
+        heartbeat(cur, status="error", error=reason, **meta)
 
 
 def run_isolated(job: str, **kwargs) -> None:
@@ -63,10 +68,13 @@ def run_isolated(job: str, **kwargs) -> None:
                        cwd=PIPELINE_DIR, timeout=spec[2])
     except (OSError, subprocess.SubprocessError) as exc:
         reason = "worker_timeout" if isinstance(exc, subprocess.TimeoutExpired) else "worker_failed"
-        try:
-            _record_failure(job, reason, kwargs)
-        except Exception:  # a failed DB must not turn a failed worker into a success
-            log.error("[memory-worker] %s could not record failure heartbeat", job)
+        # The prediction job already records model failures with their cause.
+        # Report worker infrastructure failures separately.
+        if not (job == "predict" and isinstance(exc, subprocess.CalledProcessError) and exc.returncode == 1):
+            try:
+                _record_failure(job, reason, kwargs)
+            except Exception:  # a failed DB must not turn a failed worker into a success
+                log.error("[memory-worker] %s could not record failure heartbeat", job)
         raise RuntimeError(f"{job}: {reason}") from None
     finally:
         log.info("[memory-worker] %s finished elapsed_s=%.1f parent_rss_mib=%s",
@@ -88,6 +96,29 @@ def retrain_job() -> None:
     return run_isolated("retrain")
 
 
+def _scheduled_prediction(kind: str) -> None:
+    from .production import activity, predict
+    from .timeutil import now_utc
+
+    now = now_utc()
+    if not predict.has_prediction_window(kind, now):
+        activity.log_skip(f"predict_{kind}", "no_game_in_window")
+        return
+    run_isolated("predict", kind=kind, now=now.isoformat())
+
+
+def early_prediction_job() -> None:
+    _scheduled_prediction("early")
+
+
+def final_prediction_job() -> None:
+    _scheduled_prediction("final")
+
+
+def injury_refresh_job() -> None:
+    _scheduled_prediction("refresh")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("job", choices=JOBS)
@@ -105,6 +136,15 @@ def main(argv=None) -> int:
             payload["now"] = parse_utc(payload["now"])
             if payload["expected_interval_min"] not in (15, 30, 60, 120):
                 raise ValueError("invalid injury interval")
+        elif args.job == "predict":
+            from .production.predict import KINDS
+            from .timeutil import parse_utc
+
+            if set(payload) != {"kind", "now"} or payload["kind"] not in KINDS:
+                raise ValueError("invalid prediction worker arguments")
+            payload["now"] = parse_utc(payload["now"])
+            if payload["now"] is None:
+                raise ValueError("prediction worker requires a timestamp")
         elif payload != {}:
             raise ValueError("retrain worker takes no arguments")
         module, function, _, _ = JOBS[args.job]

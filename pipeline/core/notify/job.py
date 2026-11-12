@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
 from ..decision import policy as DP
-from ..production.features import HISTORY_STAGES
+from ..production.spec import HISTORY_STAGES
 from ..timeutil import ensure_utc, now_utc, parse_utc, tpe_date, tpe_day_bounds_utc
 from . import messages as M
 from .telegram import TelegramClient, TelegramError, client_from_settings

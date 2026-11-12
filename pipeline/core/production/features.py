@@ -35,9 +35,9 @@ from ..models.elo_state import EloState
 from ..models.ml_features import WIN_FEATURES as PHASE_C_WIN_FEATURES
 from ..models.pregame_features import GameRecord, LeakageError
 from ..timeutil import ensure_utc
+from .spec import HISTORY_STAGES
 
 PHASE_C_STAGES = ("regular", "playoffs")                 # ml_features.load_games 的賽事集合（不含附加賽）
-HISTORY_STAGES = ("regular", "playin", "playoffs")       # pregame_features.load_inputs / backtest 的賽事集合
 V2_SCHEDULE_COLS = [f"{s}_{c}" for s in ("home", "away") for c in ("rest_days", "b2b", "games_7d")]
 PHASE_C_ROLL = {"form10": "win", "margin10": "margin", "pf10": "pf", "pa10": "pa", "h1f10": "h1f", "h1a10": "h1a"}
 # 模型輸入表需要的 Phase C 欄位（production 特徵組 + add_model_columns 會引用者）

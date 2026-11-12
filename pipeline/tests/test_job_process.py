@@ -1,6 +1,6 @@
 """Offline process-boundary regressions: no configured DB or external API is used."""
-from datetime import datetime
-from contextlib import contextmanager
+from datetime import datetime, timedelta
+from contextlib import contextmanager, nullcontext
 import io
 import json
 import os
@@ -44,7 +44,8 @@ def test_fixed_worker_command_uses_same_interpreter_and_inherits_environment(mon
 
 
 @pytest.mark.parametrize("job,kwargs,interval", [("injuries", {"expected_interval_min": 15}, 15),
-                                               ("retrain", {}, 7 * 24 * 60)])
+                                               ("retrain", {}, 7 * 24 * 60),
+                                               ("predict", {}, 24 * 60)])
 def test_failed_worker_heartbeat_keeps_source_and_cadence(monkeypatch, job, kwargs, interval):
     from core import db
 
@@ -64,6 +65,7 @@ def test_failed_worker_heartbeat_keeps_source_and_cadence(monkeypatch, job, kwar
 @pytest.mark.parametrize("job,payload,function", [
     ("injuries", {"now": "2026-10-30T02:15:00+00:00", "expected_interval_min": 15}, "fetch_injuries_job"),
     ("retrain", {}, "retrain_job"),
+    ("predict", {"now": "2026-10-30T02:15:00Z", "kind": "final"}, "predict_upcoming_games_job"),
 ])
 def test_child_dispatches_existing_job_without_changing_inputs(monkeypatch, job, payload, function):
     calls = []
@@ -74,13 +76,17 @@ def test_child_dispatches_existing_job_without_changing_inputs(monkeypatch, job,
     assert len(calls) == 1
     if job == "injuries":
         assert calls[0] == {"now": datetime(2026, 10, 30, 2, 15, tzinfo=UTC), "expected_interval_min": 15}
+    elif job == "predict":
+        assert calls[0] == {"now": datetime(2026, 10, 30, 2, 15, tzinfo=UTC), "kind": "final"}
     else:
         assert calls[0] == {}
 
 
 @pytest.mark.parametrize("job,payload", [("retrain", {"cutoff": "future"}),
                                          ("injuries", {"now": "bad", "expected_interval_min": 15}),
-                                         ("injuries", {"now": "2026-10-30T02:15:00Z", "expected_interval_min": 1})])
+                                         ("injuries", {"now": "2026-10-30T02:15:00Z", "expected_interval_min": 1}),
+                                         ("predict", {"now": None, "kind": "early"}),
+                                         ("predict", {"now": "2026-10-30T02:15:00Z", "kind": "arbitrary"})])
 def test_child_invalid_request_never_imports_job(monkeypatch, job, payload):
     def must_not_import(name):
         pytest.fail("invalid request reached a job")
@@ -129,7 +135,36 @@ time.sleep(30)
         os.kill(int(pid_file.read_text()), 0)
 
 
-def test_registering_jobs_never_imports_jvm_or_training_module():
+def test_scheduled_prediction_only_launches_worker_when_due(monkeypatch):
+    from core import db, timeutil
+    from core.production import activity
+
+    now = datetime(2026, 11, 12, 2, 15, tzinfo=UTC)
+    monkeypatch.setattr(timeutil, "now_utc", lambda: now)
+    monkeypatch.setattr(db, "cursor", nullcontext)
+    calls = []
+    monkeypatch.setattr(worker, "run_isolated", lambda name, **kwargs: calls.append((name, kwargs)))
+
+    tip = now - timedelta(hours=1)
+    monkeypatch.setattr(activity, "has_eligible_game_between", lambda cur, start, end: start < tip <= end)
+    worker.final_prediction_job()
+    worker.injury_refresh_job()
+    assert not calls
+
+    worker.early_prediction_job()
+    tip = now + timedelta(minutes=60)
+    worker.final_prediction_job()
+    worker.injury_refresh_job()
+    assert [kwargs["kind"] for _, kwargs in calls] == ["early", "final"]
+
+    tip = now + timedelta(hours=5)
+    worker.final_prediction_job()
+    worker.injury_refresh_job()
+    assert calls == [("predict", {"kind": kind, "now": now.isoformat()})
+                     for kind in ("early", "final", "refresh")]
+
+
+def test_registering_jobs_never_imports_jvm_or_heavy_model_modules():
     # Fresh interpreter: pytest itself imports numerical modules for other tests.
     code = """
 import json, sys
@@ -138,6 +173,8 @@ s = build_scheduler(run_on_start=False)
 assert len(s.get_jobs()) == 21
 assert 'nbainjuries' not in sys.modules and 'jpype' not in sys.modules
 assert 'core.production.retrain' not in sys.modules
+assert 'core.production.inference' not in sys.modules
+assert 'sklearn' not in sys.modules
 """
     env = {**os.environ, "DATABASE_URL": "postgresql://invalid:invalid@127.0.0.1:1/none", "PYTHON_DOTENV_DISABLED": "1"}
     subprocess.run([sys.executable, "-c", code], cwd=worker.PIPELINE_DIR, env=env, check=True, timeout=30)

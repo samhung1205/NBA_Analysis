@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 import requests
 
-from ..production.features import HISTORY_STAGES
+from ..production.spec import HISTORY_STAGES
 from ..sources import nba_cdn, referees
 from ..timeutil import ET, ensure_utc, et_date, now_utc, parse_utc
 

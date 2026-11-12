@@ -30,6 +30,8 @@ TARGET_Y = {"win": "y_home_win", "margin": "y_margin", "total": "y_total", "h1_m
 
 PROFILES: dict[str, str] = {"early": "early", "final": "T-60"}     # profile → temporal_features timing
 FINAL_PROFILE_MAX_LEAD = timedelta(hours=3)
+MIN_PREDICTION_LEAD = timedelta(minutes=5)
+HISTORY_STAGES = ("regular", "playin", "playoffs")
 
 # 重訓：只用「開賽時間早於 cutoff − 4 小時」且已 final 的比賽（確保比賽在 cutoff 前已結束、結果在 cutoff 前可知）
 TRAINING_GAME_BUFFER = timedelta(hours=4)

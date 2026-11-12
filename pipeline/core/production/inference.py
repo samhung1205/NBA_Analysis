@@ -29,7 +29,7 @@ from . import features as pf
 from . import spec
 from .artifact import LoadedArtifact
 
-MIN_LEAD = timedelta(minutes=5)          # 距開賽不到 5 分鐘不再產生預測（避免跨過開賽）
+MIN_LEAD = spec.MIN_PREDICTION_LEAD
 TOP_K = 8
 
 # 資料品質旗標 → 信心度係數（啟發式：反映「這場的輸入比訓練時典型的少 / 舊」；不改變預測值本身）

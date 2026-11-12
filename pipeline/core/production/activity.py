@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..timeutil import ensure_utc
-from .features import HISTORY_STAGES
+from .spec import HISTORY_STAGES
 
 log = logging.getLogger(__name__)
 

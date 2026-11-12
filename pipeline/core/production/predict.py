@@ -26,20 +26,23 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ..timeutil import ensure_utc, now_utc, parse_utc
 from . import activity
-from . import artifact as art_mod
 from . import spec
-from .features import HistoryInputs, ScheduledGame
-from .inference import MIN_LEAD, GamePrediction, Skipped, predict_games
+
+if TYPE_CHECKING:
+    from .artifact import LoadedArtifact
+    from .features import ScheduledGame
+    from .inference import GamePrediction
 
 log = logging.getLogger(__name__)
 
 KINDS = ("early", "final", "refresh")
 HORIZON = timedelta(hours=36)
 FINAL_WINDOW = timedelta(minutes=75)
+MIN_LEAD = spec.MIN_PREDICTION_LEAD
 LOCK_NS = 58405                      # pg_advisory_xact_lock(namespace, game_id)
 MATERIAL = {"home_win_prob": 0.01, "pred_margin": 0.5, "pred_total": 1.0, "pred_home_h1": 0.5, "pred_away_h1": 0.5}
 HEARTBEAT = dict(source_key="model_predict", display_name=f"預測引擎（{spec.MODEL_VERSION}）", category="model",
@@ -75,7 +78,7 @@ def _latest_rows(cur, game_ids: list[int]) -> dict[int, dict]:
     return {r["game_id"]: r for r in cur.fetchall()}
 
 
-def select_candidates(cur, kind: str, now: datetime, art: art_mod.LoadedArtifact, *, horizon: timedelta = HORIZON,
+def select_candidates(cur, kind: str, now: datetime, art: LoadedArtifact, *, horizon: timedelta = HORIZON,
                       game_ids: list[int] | None = None) -> list[ScheduledGame]:
     from .inputs import load_upcoming
     if kind == "early":
@@ -154,25 +157,34 @@ def upsert_prediction(tcur, p: GamePrediction, kind: str) -> str:
 # Job                                                                  #
 # ------------------------------------------------------------------ #
 
+def has_prediction_window(kind: str, now: datetime, horizon: timedelta = HORIZON) -> bool:
+    # Early also checks artifact integrity and records the daily heartbeat.
+    if kind == "early":
+        return True
+    from ..db import cursor
+
+    lo, hi = ((now + MIN_LEAD, now + FINAL_WINDOW) if kind == "final" else
+              (now + FINAL_WINDOW, now + horizon))
+    with cursor() as cur:
+        return activity.has_eligible_game_between(cur, lo, hi)
+
+
 def predict_upcoming_games_job(kind: str = "early", now: datetime | None = None, *, horizon: timedelta = HORIZON,
                                game_ids: list[int] | None = None, dry_run: bool = False,
                                root: str | Path | None = None) -> PredictReport:
     from ..db import cursor, heartbeat, transaction
-    from .inputs import load_history, load_pending
-
     if kind not in KINDS:
         raise ValueError(f"kind 必須是 {KINDS}")
     now = ensure_utc(now or now_utc())
     rep = PredictReport(kind, now.isoformat())
-    if kind != "early" and game_ids is None and not dry_run:
-        # scheduler-efficiency-v1：final / refresh 每 5~15 分鐘醒來；視窗內沒有任何 eligible 比賽就不載入 artifact。
-        # （early 每日一次，照舊載入 artifact —— 它同時是 artifact 損壞的每日偵測 + 存活心跳。）
-        lo, hi = ((now + MIN_LEAD, now + FINAL_WINDOW) if kind == "final" else (now + FINAL_WINDOW, now + horizon))
-        with cursor() as cur:
-            if not activity.has_eligible_game_between(cur, lo, hi):
-                rep.note = "視窗內沒有 eligible 比賽（scheduler-efficiency-v1）"
-                activity.log_skip(f"predict_{kind}", "no_game_in_window")
-                return rep
+    if game_ids is None and not dry_run and not has_prediction_window(kind, now, horizon):
+        rep.note = "視窗內沒有 eligible 比賽（scheduler-efficiency-v1）"
+        activity.log_skip(f"predict_{kind}", "no_game_in_window")
+        return rep
+
+    from . import artifact as art_mod
+    from .inference import predict_games
+    from .inputs import load_history, load_pending
     try:
         art = art_mod.load_current(root)
     except art_mod.ArtifactError as e:
@@ -195,7 +207,7 @@ def predict_upcoming_games_job(kind: str = "early", now: datetime | None = None,
         # validates actual DB content/as-of; research and retraining stay direct.
         cache_dir = (art_mod.artifact_root(root) / ".runtime-cache" / "history"
                      if not dry_run and game_ids is None else None)
-        history: HistoryInputs = load_history(cur, now, cache_dir=cache_dir)
+        history = load_history(cur, now, cache_dir=cache_dir)
         pending = load_pending(cur, now, max(g.game_time_utc for g in cands))
     try:
         preds, skipped = predict_games(art, history, cands, pending, now, kind=kind)
