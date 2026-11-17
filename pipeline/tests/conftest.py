@@ -31,7 +31,7 @@ TABLES = ["browser_sync_jobs", "referee_assignments", "referee_assignment_report
           "bets", "games", "players", "teams", "data_sources"]
 
 
-TABLES = ["model_shadow_results", "model_shadow_predictions", "model_shadow_states", "model_shadow_experiments", "model_evaluation_reports"] + TABLES
+TABLES = ["cold_sizing_batches", "cold_decisions", "cold_injury_entries", "model_shadow_results", "model_shadow_predictions", "model_shadow_states", "model_shadow_experiments", "model_evaluation_reports"] + TABLES
 
 
 @pytest.fixture(scope="session")

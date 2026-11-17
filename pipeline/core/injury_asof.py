@@ -100,7 +100,7 @@ def build_index(reports: Iterable[dict], entries: Iterable[dict], team_abbr_by_i
     return InjuryIndex(list(snaps.values()))
 
 
-def index_queries(since=None, until=None, *, fingerprints=False):
+def index_queries(since=None, until=None, *, fingerprints=False, archive=False):
     conditions, params = [], []
     if since is not None:
         conditions.append("r.report_time_utc >= %s")
@@ -113,20 +113,33 @@ def index_queries(since=None, until=None, *, fingerprints=False):
     report_key = f"{bucket}r.id AS sort_id, " if fingerprints else ""
     entry_key = f"{bucket}e.id AS sort_id, t.abbr, " if fingerprints else ""
     teams_join = " LEFT JOIN teams t ON t.id = e.team_id" if fingerprints else ""
+    entry_columns = (f"{entry_key}e.id AS entry_id, e.report_id, e.game_date, e.team_id, "
+                     "e.player_id, e.player_name, e.status, e.reason")
+    entries = f"SELECT {entry_columns} FROM injury_report_entries e JOIN injury_reports r ON r.id = e.report_id{teams_join}{where}"
+    if archive:
+        entries += (
+            f" UNION ALL SELECT {entry_columns} FROM injury_reports r JOIN cold_injury_entries a ON a.report_id = r.id"
+            " CROSS JOIN LATERAL jsonb_populate_recordset(NULL::injury_report_entries, a.entries) e"
+            f"{teams_join}{where}"
+        )
     return [
         (f"SELECT {report_key}r.id, r.report_time_utc, r.coverage FROM injury_reports r{where}", params),
-        (f"SELECT {entry_key}e.report_id, e.game_date, e.team_id, e.player_id, e.player_name, e.status, e.reason"
-         f" FROM injury_report_entries e JOIN injury_reports r ON r.id = e.report_id{teams_join}{where}", params),
+        (entries, params * (2 if archive else 1)),
     ]
+
+
+def has_cold_entries(cur) -> bool:
+    cur.execute("SELECT to_regclass('cold_injury_entries') IS NOT NULL AS ready")
+    return bool(cur.fetchone()["ready"])
 
 
 def load_index(cur, *, since: datetime | None = None, until: datetime | None = None) -> InjuryIndex:
     cur.execute("SELECT id, abbr FROM teams")
     abbr = {r["id"]: r["abbr"] for r in cur.fetchall()}
-    (report_sql, report_args), (entry_sql, entry_args) = index_queries(since, until)
+    (report_sql, report_args), (entry_sql, entry_args) = index_queries(since, until, archive=has_cold_entries(cur))
     cur.execute(report_sql + " ORDER BY r.report_time_utc", report_args)
     reports = cur.fetchall()
-    cur.execute(entry_sql + " ORDER BY e.id", entry_args)
+    cur.execute(entry_sql + " ORDER BY entry_id", entry_args)
     return build_index(reports, cur.fetchall(), abbr)
 
 
