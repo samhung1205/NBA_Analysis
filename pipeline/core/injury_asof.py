@@ -100,16 +100,33 @@ def build_index(reports: Iterable[dict], entries: Iterable[dict], team_abbr_by_i
     return InjuryIndex(list(snaps.values()))
 
 
-def load_index(cur, *, since: datetime | None = None) -> InjuryIndex:
+def index_queries(since=None, until=None, *, fingerprints=False):
+    conditions, params = [], []
+    if since is not None:
+        conditions.append("r.report_time_utc >= %s")
+        params.append(since)
+    if until is not None:
+        conditions.append("r.report_time_utc < %s")
+        params.append(until)
+    where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+    bucket = "(r.report_time_utc AT TIME ZONE 'UTC')::date AS bucket, "
+    report_key = f"{bucket}r.id AS sort_id, " if fingerprints else ""
+    entry_key = f"{bucket}e.id AS sort_id, t.abbr, " if fingerprints else ""
+    teams_join = " LEFT JOIN teams t ON t.id = e.team_id" if fingerprints else ""
+    return [
+        (f"SELECT {report_key}r.id, r.report_time_utc, r.coverage FROM injury_reports r{where}", params),
+        (f"SELECT {entry_key}e.report_id, e.game_date, e.team_id, e.player_id, e.player_name, e.status, e.reason"
+         f" FROM injury_report_entries e JOIN injury_reports r ON r.id = e.report_id{teams_join}{where}", params),
+    ]
+
+
+def load_index(cur, *, since: datetime | None = None, until: datetime | None = None) -> InjuryIndex:
     cur.execute("SELECT id, abbr FROM teams")
     abbr = {r["id"]: r["abbr"] for r in cur.fetchall()}
-    where, params = ("WHERE report_time_utc >= %s", (since,)) if since else ("", ())
-    cur.execute(f"SELECT id, report_time_utc, coverage FROM injury_reports {where} ORDER BY report_time_utc", params)
+    (report_sql, report_args), (entry_sql, entry_args) = index_queries(since, until)
+    cur.execute(report_sql + " ORDER BY r.report_time_utc", report_args)
     reports = cur.fetchall()
-    cur.execute(
-        f"SELECT e.report_id, e.game_date, e.team_id, e.player_id, e.player_name, e.status, e.reason"
-        f" FROM injury_report_entries e JOIN injury_reports r ON r.id = e.report_id {where.replace('report_time_utc', 'r.report_time_utc')}",
-        params)
+    cur.execute(entry_sql + " ORDER BY e.id", entry_args)
     return build_index(reports, cur.fetchall(), abbr)
 
 

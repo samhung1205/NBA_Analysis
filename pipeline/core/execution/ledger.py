@@ -352,11 +352,15 @@ def paper_strategy_scheduled() -> None:
 # ------------------------------------------------------------------ #
 
 def load_ledger(cur, sid: str) -> list[GameDecision]:
-    cur.execute("SELECT * FROM paper_strategy_decisions WHERE strategy_id = %s ORDER BY decision_time, game_id", (sid,))
-    drows = cur.fetchall()
-    cur.execute("SELECT * FROM paper_strategy_bets WHERE strategy_id = %s ORDER BY id", (sid,))
+    from ..read_cache import read_unchanged
+
+    drows = read_unchanged(cur, ("paper-decisions", sid),
+                           "SELECT * FROM paper_strategy_decisions WHERE strategy_id = %s", (sid,),
+                           order_by="p.decision_time, p.game_id")
+    wagers = read_unchanged(cur, ("paper-wagers", sid),
+                            "SELECT * FROM paper_strategy_bets WHERE strategy_id = %s", (sid,))
     bets: dict[int, list[Wager]] = {}
-    for r in cur.fetchall():
+    for r in wagers:
         bets.setdefault(int(r["decision_id"]), []).append(wager_from_row(r))
     out = []
     for r in drows:

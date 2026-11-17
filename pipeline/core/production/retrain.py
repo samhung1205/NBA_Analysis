@@ -218,7 +218,7 @@ def retrain(cutoff: datetime | None = None, *, root: str | Path | None = None, p
         if n_tmp:
             log.warning("清除 %d 個中斷留下的暫存版本目錄", n_tmp)
         limit = cutoff - spec.TRAINING_GAME_BUFFER
-        history = (history_loader or _db_history)(limit)
+        history = history_loader(limit) if history_loader else _db_history(limit, root=root)
         history = history.before(limit)
         bundle, finals = train_bundle(history, cutoff, trained_at=trained_at)
         gates = run_gates(bundle, finals)
@@ -239,11 +239,12 @@ def retrain(cutoff: datetime | None = None, *, root: str | Path | None = None, p
     return res
 
 
-def _db_history(limit: datetime) -> pf.HistoryInputs:
+def _db_history(limit: datetime, *, root=None) -> pf.HistoryInputs:
     from ..db import cursor
     from .inputs import load_history
     with cursor() as cur:
-        return load_history(cur, limit, full_injuries=True)
+        return load_history(cur, limit, full_injuries=True,
+                            cache_dir=art_mod.artifact_root(root) / ".runtime-cache" / "history")
 
 
 def retrain_job() -> RetrainResult | None:

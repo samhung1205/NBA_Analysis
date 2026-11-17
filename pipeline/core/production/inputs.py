@@ -13,7 +13,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from .. import metrics
-from ..injury_asof import InjuryIndex, load_index
+from ..injury_asof import load_index
 from ..models.pregame_features import TEAM_METRICS, GameRecord
 from ..timeutil import ensure_utc
 from .features import HISTORY_STAGES, HistoryInputs, ScheduledGame
@@ -21,31 +21,46 @@ from .features import HISTORY_STAGES, HistoryInputs, ScheduledGame
 INJURY_LOOKBACK = timedelta(days=5)        # ≥ injury_asof.LOOKBACK_DAYS（4 天）
 
 
-def _load_history_base(cur, as_of: datetime):
-    as_of = ensure_utc(as_of)
-    cur.execute(
-        """
-        SELECT g.id, g.season, g.season_stage, g.date_utc, g.home_team_id, g.away_team_id,
-               ht.abbr AS h_abbr, at.abbr AS a_abbr, g.home_pts, g.away_pts, g.home_h1, g.away_h1
-          FROM games g JOIN teams ht ON ht.id = g.home_team_id JOIN teams at ON at.id = g.away_team_id
-         WHERE g.status = 'final' AND g.season_stage = ANY(%s)
-           AND g.home_pts IS NOT NULL AND g.away_pts IS NOT NULL AND g.date_utc < %s
-         ORDER BY g.date_utc, g.id""", (list(HISTORY_STAGES), as_of))
+def _history_queries(as_of, *, since=None, fingerprints=False):
+    stage = list(HISTORY_STAGES)
+    bound = " AND g.date_utc >= %s" if since is not None else ""
+    tail = (as_of, since) if since is not None else (as_of,)
+    bucket = "date_trunc('week', g.date_utc AT TIME ZONE 'UTC')::date AS bucket, "
+    game_key = f"{bucket}g.id AS sort_id, " if fingerprints else ""
+    derived_key = f"{bucket}ARRAY[d.game_id, d.team_id] AS sort_id, " if fingerprints else ""
+    player_key = f"{bucket}ARRAY[s.game_id, s.player_id] AS sort_id, " if fingerprints else ""
+    return [
+        (f"""SELECT {game_key}g.id, g.season, g.season_stage, g.date_utc, g.home_team_id, g.away_team_id,
+                    ht.abbr AS h_abbr, at.abbr AS a_abbr, g.home_pts, g.away_pts, g.home_h1, g.away_h1
+               FROM games g JOIN teams ht ON ht.id = g.home_team_id JOIN teams at ON at.id = g.away_team_id
+              WHERE g.status = 'final' AND g.season_stage = ANY(%s)
+                AND g.home_pts IS NOT NULL AND g.away_pts IS NOT NULL AND g.date_utc < %s{bound}""",
+         (stage, *tail)),
+        (f"SELECT {derived_key}d.game_id, d.team_id, "
+         + ", ".join(f"d.{m}" for m in TEAM_METRICS)
+         + " FROM team_game_derived d JOIN games g ON g.id = d.game_id"
+           " WHERE d.formula_version = %s AND g.status = 'final' AND g.date_utc < %s" + bound,
+         (metrics.FORMULA_VERSION, *tail)),
+        (f"""SELECT {player_key}s.game_id, s.team_id, s.player_id, s.min, s.started, s.plus_minus
+               FROM player_game_stats s JOIN games g ON g.id = s.game_id
+              WHERE g.status = 'final' AND g.date_utc < %s{bound}""",
+         tail),
+    ]
+
+
+def _load_history_base(cur, as_of: datetime, *, since=None):
+    (game_sql, game_args), (derived_sql, derived_args), (player_sql, player_args) = _history_queries(
+        ensure_utc(as_of), since=since
+    )
+    cur.execute(game_sql + " ORDER BY g.date_utc, g.id", game_args)
     rows = cur.fetchall()
     games = [GameRecord(r["id"], r["season"], ensure_utc(r["date_utc"]), r["home_team_id"], r["away_team_id"],
                         r["h_abbr"], r["a_abbr"], r["home_pts"], r["away_pts"], r["home_h1"], r["away_h1"])
              for r in rows]
     stages = {r["id"]: r["season_stage"] for r in rows}
-    cur.execute(
-        "SELECT d.game_id, d.team_id, " + ", ".join(f"d.{m}" for m in TEAM_METRICS)
-        + " FROM team_game_derived d JOIN games g ON g.id = d.game_id"
-          " WHERE d.formula_version = %s AND g.status = 'final' AND g.date_utc < %s",
-        (metrics.FORMULA_VERSION, as_of))
+    cur.execute(derived_sql, derived_args)
     derived = {(r["game_id"], r["team_id"]): {m: r[m] for m in TEAM_METRICS} for r in cur.fetchall()}
-    cur.execute(
-        """SELECT s.game_id, s.team_id, s.player_id, s.min, s.started, s.plus_minus
-             FROM player_game_stats s JOIN games g ON g.id = s.game_id
-            WHERE g.status = 'final' AND g.date_utc < %s""", (as_of,))
+    cur.execute(player_sql + " ORDER BY s.game_id, s.player_id", player_args)
     players: dict[int, list] = defaultdict(list)
     for r in cur.fetchall():
         players[r["game_id"]].append((r["team_id"], r["player_id"], float(r["min"] or 0.0), bool(r["started"]),
@@ -56,17 +71,21 @@ def _load_history_base(cur, as_of: datetime):
 def load_history(cur, as_of: datetime, *, injury_since: datetime | None = None, full_injuries: bool = False,
                  cache_dir=None) -> HistoryInputs:
     as_of = ensure_utc(as_of)
-    if cache_dir is not None and not full_injuries:
+    if cache_dir is not None:
         from .history_cache import load_base
 
-        games, stages, derived, players = load_base(cur, as_of, cache_dir, _load_history_base)
+        games, stages, derived, players = load_base(
+            cur, as_of, cache_dir, _load_history_base, lambda at: _history_queries(at, fingerprints=True)
+        )
     else:
         games, stages, derived, players = _load_history_base(cur, as_of)
-    if full_injuries:
-        index = load_index(cur)
+    since = None if full_injuries else injury_since or (as_of - INJURY_LOOKBACK)
+    if cache_dir is not None and not full_injuries:
+        from .injury_cache import load_recent
+
+        index = load_recent(cur, since, as_of, cache_dir)
     else:
-        index = load_index(cur, since=injury_since or (as_of - INJURY_LOOKBACK))
-    index = InjuryIndex([s for s in index.snapshots if s.report_time_utc < as_of])
+        index = load_index(cur, since=since, until=as_of)
     return HistoryInputs(games, stages, derived, players, index, as_of)
 
 

@@ -201,7 +201,7 @@ def load_day_inputs(cur, day: date, now: datetime) -> dict[str, Any]:
     odds = load_latest_odds(cur, ids, now)
     preds = load_predictions(cur, ids, now)
     pricing = load_relevant_pricings(cur, ids, odds, preds, now)
-    sizing = load_sizing_references(cur, [r["id"] for r in pricing], P.RISK_POLICY.version, now)
+    sizing = load_sizing_references(cur, [r["id"] for r in pricing if P.PRIMARY.matches(r)], P.RISK_POLICY.version, now)
     return {"games": games, "odds": odds, "preds": preds, "pricing": pricing, "sizing": sizing}
 
 

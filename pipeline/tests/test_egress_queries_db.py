@@ -7,6 +7,7 @@ from core.odds.canonical import MONEYLINE, CLOSED
 from core.pricing import job as pricing
 from core.pricing.alignment import latest_snapshots_as_of, select_prediction
 from core.pricing.queries import load_latest_odds
+from core.read_cache import read_unchanged
 from core.sizing import job as sizing
 from core.timeutil import tpe_date
 from test_pricing_artifact import TIP, S, game, league, setup, insert_pred, write_odds  # noqa: F401
@@ -72,3 +73,27 @@ def test_latest_closed_quote_ties_and_bookmaker_fallback_do_not_reopen_market(db
     assert latest_snapshots_as_of(old, now) == latest_snapshots_as_of(reduced, now)
     assert len(reduced) < len(old)
     assert next(r for r in reduced if r['market']=='ml')['market_status']=='closed'
+
+
+def test_verified_query_hit_sends_only_revision_and_updates_changed_rows(db):
+    with db.cursor() as cur:
+        cur.execute("CREATE TEMP TABLE quota_test_rows (id int PRIMARY KEY, payload jsonb)")
+        try:
+            cur.execute("""INSERT INTO quota_test_rows VALUES (1, '{"state":"pending"}'), (2, '{"state":"open"}')""")
+
+            def fetch():
+                rows = read_unchanged(cur, ("quota-test",), "SELECT * FROM quota_test_rows", ())
+                return rows, cur.rowcount
+
+            original, sent = fetch()
+            assert sent == 2
+            assert fetch() == (original, 1)
+            cur.execute("""UPDATE quota_test_rows SET payload='{"state":"settled"}' WHERE id=1""")
+            corrected, sent = fetch()
+            assert sent == 2
+            assert corrected[0]["payload"]["state"] == "settled"
+            assert fetch() == (corrected, 1)
+            cur.execute("DELETE FROM quota_test_rows")
+            assert fetch() == ([], 1)
+        finally:
+            cur.execute("DROP TABLE quota_test_rows")
